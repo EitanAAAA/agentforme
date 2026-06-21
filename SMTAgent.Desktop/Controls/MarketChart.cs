@@ -25,6 +25,9 @@ public sealed class MarketChart : FrameworkElement
     public static readonly DependencyProperty SignalsProperty =
         DependencyProperty.Register(nameof(Signals), typeof(IEnumerable), typeof(MarketChart), new FrameworkPropertyMetadata(null, OnCollectionPropertyChanged));
 
+    public static readonly DependencyProperty FocusedAnnotationsProperty =
+        DependencyProperty.Register(nameof(FocusedAnnotations), typeof(IEnumerable), typeof(MarketChart), new FrameworkPropertyMetadata(null, OnCollectionPropertyChanged));
+
     public static readonly DependencyProperty ViewStartIndexProperty =
         DependencyProperty.Register(nameof(ViewStartIndex), typeof(int), typeof(MarketChart), new FrameworkPropertyMetadata(0, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender));
 
@@ -37,18 +40,30 @@ public sealed class MarketChart : FrameworkElement
     public static readonly DependencyProperty CrosshairTimeProperty =
         DependencyProperty.Register(nameof(CrosshairTime), typeof(DateTime?), typeof(MarketChart), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault | FrameworkPropertyMetadataOptions.AffectsRender));
 
-    private readonly Pen _gridPen = new(new SolidColorBrush(Color.FromRgb(30, 40, 56)), 1);
-    private readonly Pen _wickPen = new(new SolidColorBrush(Color.FromRgb(142, 156, 181)), 1);
-    private readonly Brush _bullBrush = new SolidColorBrush(Color.FromRgb(53, 218, 163));
-    private readonly Brush _bearBrush = new SolidColorBrush(Color.FromRgb(255, 92, 120));
-    private readonly Brush _mutedTextBrush = new SolidColorBrush(Color.FromRgb(137, 151, 176));
-    private readonly Brush _panelBrush = new SolidColorBrush(Color.FromRgb(10, 15, 24));
-    private readonly Brush _tooltipBrush = new SolidColorBrush(Color.FromArgb(236, 13, 19, 31));
-    private readonly Brush _swingHighBrush = new SolidColorBrush(Color.FromRgb(255, 190, 84));
-    private readonly Brush _swingLowBrush = new SolidColorBrush(Color.FromRgb(102, 191, 255));
-    private readonly Pen _bearSignalPen = new(new SolidColorBrush(Color.FromRgb(255, 92, 120)), 2.2);
-    private readonly Pen _bullSignalPen = new(new SolidColorBrush(Color.FromRgb(53, 218, 163)), 2.2);
-    private readonly Pen _crosshairPen = new(new SolidColorBrush(Color.FromArgb(150, 160, 176, 198)), 1);
+    private readonly Pen _gridPen = new(new SolidColorBrush(Color.FromRgb(222, 230, 244)), 1);
+    private readonly Pen _minorGridPen = new(new SolidColorBrush(Color.FromRgb(235, 240, 249)), 1);
+    private readonly Pen _wickPen = new(new SolidColorBrush(Color.FromRgb(70, 156, 155)), 1);
+    private readonly Brush _bullBrush = new SolidColorBrush(Color.FromRgb(8, 153, 129));
+    private readonly Brush _bearBrush = new SolidColorBrush(Color.FromRgb(242, 54, 69));
+    private readonly Brush _mutedTextBrush = new SolidColorBrush(Color.FromRgb(31, 41, 55));
+    private readonly Brush _softTextBrush = new SolidColorBrush(Color.FromRgb(100, 116, 139));
+    private readonly Brush _panelBrush = new SolidColorBrush(Color.FromRgb(238, 244, 255));
+    private readonly Brush _tooltipBrush = new SolidColorBrush(Color.FromArgb(242, 255, 255, 255));
+    private readonly Brush _swingHighBrush = new SolidColorBrush(Color.FromRgb(47, 107, 255));
+    private readonly Brush _swingLowBrush = new SolidColorBrush(Color.FromRgb(47, 107, 255));
+    private readonly Brush _smtDotBrush = new SolidColorBrush(Color.FromRgb(255, 211, 0));
+    private readonly Pen _smtDotPen = new(new SolidColorBrush(Color.FromRgb(17, 24, 39)), 1.4);
+    private readonly Pen _bearSignalPen = new(new SolidColorBrush(Color.FromRgb(242, 54, 69)), 2.2);
+    private readonly Pen _bullSignalPen = new(new SolidColorBrush(Color.FromRgb(47, 107, 255)), 2.2);
+    private readonly Pen _crosshairPen = new(new SolidColorBrush(Color.FromArgb(150, 86, 99, 120)), 1);
+    private readonly Pen _bosPen = new(new SolidColorBrush(Color.FromRgb(17, 24, 39)), 2);
+    private readonly Brush _fvgFillBrush = new SolidColorBrush(Color.FromArgb(48, 47, 107, 255));
+    private readonly Brush _ifvgFillBrush = new SolidColorBrush(Color.FromArgb(58, 245, 158, 11));
+    private readonly Pen _ifvgPen = new(new SolidColorBrush(Color.FromRgb(245, 158, 11)), 1.8);
+    private readonly Pen _halfBoxPen = new(new SolidColorBrush(Color.FromRgb(37, 99, 235)), 1.4);
+    private readonly Pen _entryPen = new(new SolidColorBrush(Color.FromRgb(255, 211, 0)), 1.6);
+    private readonly Brush _riskBrush = new SolidColorBrush(Color.FromArgb(52, 242, 54, 69));
+    private readonly Brush _rewardBrush = new SolidColorBrush(Color.FromArgb(52, 8, 153, 129));
     private Point? _dragStartPoint;
     private int _dragStartIndex;
 
@@ -89,6 +104,12 @@ public sealed class MarketChart : FrameworkElement
         set => SetValue(SignalsProperty, value);
     }
 
+    public IEnumerable? FocusedAnnotations
+    {
+        get => (IEnumerable?)GetValue(FocusedAnnotationsProperty);
+        set => SetValue(FocusedAnnotationsProperty, value);
+    }
+
     public int ViewStartIndex
     {
         get => (int)GetValue(ViewStartIndexProperty);
@@ -119,7 +140,7 @@ public sealed class MarketChart : FrameworkElement
 
         var width = ActualWidth;
         var height = ActualHeight;
-        drawingContext.DrawRoundedRectangle(_panelBrush, null, new Rect(0, 0, width, height), 8, 8);
+        drawingContext.DrawRectangle(_panelBrush, null, new Rect(0, 0, width, height));
 
         var candles = ToList<Candle>(Candles);
         if (candles.Count == 0)
@@ -140,18 +161,33 @@ public sealed class MarketChart : FrameworkElement
             return;
         }
 
+        var focusedAnnotations = ToList<FocusedChartAnnotation>(FocusedAnnotations);
         var min = visibleCandles.Min(candle => candle.Low);
         var max = visibleCandles.Max(candle => candle.High);
+        foreach (var annotationPrice in focusedAnnotations
+            .SelectMany(annotation => new[] { (decimal?)annotation.Price, annotation.SecondaryPrice, annotation.TertiaryPrice })
+            .Where(price => price.HasValue)
+            .Select(price => price!.Value))
+        {
+            min = Math.Min(min, annotationPrice);
+            max = Math.Max(max, annotationPrice);
+        }
         var pad = Math.Max((max - min) * 0.08m, 1m);
         min -= pad;
         max += pad;
 
-        DrawGrid(drawingContext, plot, min, max);
-        DrawCandles(drawingContext, candles, start, visibleCount, plot, min, max);
-        DrawSwings(drawingContext, ToList<SwingPoint>(SwingPoints), start, visibleCount, plot, min, max);
-        DrawSignals(drawingContext, ToList<SmtSignal>(Signals), candles, start, visibleCount, plot, min, max);
+        var pricePlot = new Rect(plot.Left, plot.Top, plot.Width, plot.Height * 0.78);
+        var volumePlot = new Rect(plot.Left, plot.Top + (plot.Height * 0.80), plot.Width, plot.Height * 0.20);
+
+        DrawGrid(drawingContext, pricePlot, min, max);
+        DrawFvgSignals(drawingContext, ToList<SmtSignal>(Signals), candles, start, visibleCount, pricePlot, min, max);
+        DrawCandles(drawingContext, candles, start, visibleCount, pricePlot, min, max);
+        DrawLastPriceLine(drawingContext, visibleCandles[^1], pricePlot, min, max);
+        DrawFocusedAnnotations(drawingContext, focusedAnnotations, candles, start, visibleCount, pricePlot, min, max);
+        DrawHighLowSignals(drawingContext, ToList<SmtSignal>(Signals), candles, start, visibleCount, pricePlot, min, max);
+        DrawVolume(drawingContext, candles, start, visibleCount, volumePlot);
         DrawTimeScale(drawingContext, candles, start, visibleCount, plot);
-        DrawCrosshair(drawingContext, candles, start, visibleCount, plot, min, max);
+        DrawCrosshair(drawingContext, candles, start, visibleCount, pricePlot, min, max);
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -238,7 +274,7 @@ public sealed class MarketChart : FrameworkElement
 
     private void DrawEmptyState(DrawingContext context, double width, double height)
     {
-        var text = BuildText("Waiting for synchronized 15m data...", 13, _mutedTextBrush, FontWeights.Medium);
+        var text = BuildText("Waiting for synchronized market data...", 13, _softTextBrush, FontWeights.Medium);
         context.DrawText(text, new Point((width - text.Width) / 2, (height - text.Height) / 2));
     }
 
@@ -250,14 +286,14 @@ public sealed class MarketChart : FrameworkElement
             context.DrawLine(_gridPen, new Point(plot.Left, y), new Point(plot.Right, y));
 
             var price = max - ((max - min) / 4 * i);
-            var label = BuildText(price.ToString("0.00"), 10, _mutedTextBrush, FontWeights.Normal);
+            var label = BuildText(price.ToString("N2"), 12, _mutedTextBrush, FontWeights.SemiBold);
             context.DrawText(label, new Point(plot.Right + 8, y - 8));
         }
 
         for (var i = 0; i <= 5; i++)
         {
             var x = plot.Left + (plot.Width / 5 * i);
-            context.DrawLine(_gridPen, new Point(x, plot.Top), new Point(x, plot.Bottom));
+            context.DrawLine(_minorGridPen, new Point(x, plot.Top), new Point(x, plot.Bottom));
         }
     }
 
@@ -278,11 +314,12 @@ public sealed class MarketChart : FrameworkElement
             var up = candle.Close >= candle.Open;
             var bodyBrush = up ? _bullBrush : _bearBrush;
 
-            context.DrawLine(_wickPen, new Point(x, highY), new Point(x, lowY));
+            var wickPen = new Pen(bodyBrush, 1);
+            context.DrawLine(wickPen, new Point(x, highY), new Point(x, lowY));
             var bodyTop = Math.Min(openY, closeY);
             var bodyHeight = Math.Max(2, Math.Abs(openY - closeY));
             var body = new Rect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
-            context.DrawRoundedRectangle(bodyBrush, null, body, 2, 2);
+            context.DrawRectangle(bodyBrush, null, body);
 
             if (index == candles.Count - 1)
             {
@@ -296,21 +333,52 @@ public sealed class MarketChart : FrameworkElement
         }
     }
 
-    private void DrawSwings(DrawingContext context, IReadOnlyList<SwingPoint> swings, int start, int visibleCount, Rect plot, decimal min, decimal max)
+    private void DrawVolume(DrawingContext context, IReadOnlyList<Candle> candles, int start, int visibleCount, Rect plot)
     {
-        var step = plot.Width / Math.Max(visibleCount, 1);
-        var end = start + visibleCount;
-
-        foreach (var swing in swings.Where(swing => swing.Symbol == Symbol && swing.CandleIndex >= start && swing.CandleIndex < end))
+        var end = Math.Min(candles.Count, start + visibleCount);
+        if (end <= start)
         {
-            var x = XForIndex(swing.CandleIndex, start, step, plot);
-            var y = Scale(swing.Price, min, max, plot);
-            var brush = swing.Type == SwingPointType.High ? _swingHighBrush : _swingLowBrush;
-            context.DrawEllipse(brush, null, new Point(x, y), 4, 4);
+            return;
+        }
+
+        var maxVolume = Math.Max(1, candles.Skip(start).Take(end - start).Max(candle => candle.Volume));
+        var step = plot.Width / Math.Max(visibleCount, 1);
+        var bodyWidth = Math.Clamp(step * 0.62, 2, 12);
+        var label = BuildText("Vol", 12, _mutedTextBrush, FontWeights.SemiBold);
+        context.DrawText(label, new Point(plot.Left + 2, plot.Top + 2));
+
+        for (var index = start; index < end; index++)
+        {
+            var candle = candles[index];
+            var x = XForIndex(index, start, step, plot);
+            var height = Math.Max(2, (double)candle.Volume / maxVolume * (plot.Height - 18));
+            var top = plot.Bottom - height;
+            var color = candle.Close >= candle.Open
+                ? Color.FromArgb(105, 8, 153, 129)
+                : Color.FromArgb(105, 242, 54, 69);
+            context.DrawRectangle(new SolidColorBrush(color), null, new Rect(x - bodyWidth / 2, top, bodyWidth, height));
         }
     }
 
-    private void DrawSignals(DrawingContext context, IReadOnlyList<SmtSignal> signals, IReadOnlyList<Candle> candles, int start, int visibleCount, Rect plot, decimal min, decimal max)
+    private void DrawLastPriceLine(DrawingContext context, Candle candle, Rect plot, decimal min, decimal max)
+    {
+        var up = candle.Close >= candle.Open;
+        var color = up ? Color.FromRgb(8, 153, 129) : Color.FromRgb(242, 54, 69);
+        var brush = new SolidColorBrush(color);
+        var y = Scale(candle.Close, min, max, plot);
+        var pen = new Pen(new SolidColorBrush(Color.FromArgb(155, color.R, color.G, color.B)), 1)
+        {
+            DashStyle = DashStyles.Dot
+        };
+
+        context.DrawLine(pen, new Point(plot.Left, y), new Point(plot.Right, y));
+        var priceText = BuildText(candle.Close.ToString("N2"), 12, Brushes.White, FontWeights.Bold);
+        var tag = new Rect(plot.Right + 4, y - 12, priceText.Width + 14, 24);
+        context.DrawRoundedRectangle(brush, null, tag, 3, 3);
+        context.DrawText(priceText, new Point(tag.Left + 7, tag.Top + 4));
+    }
+
+    private void DrawHighLowSignals(DrawingContext context, IReadOnlyList<SmtSignal> signals, IReadOnlyList<Candle> candles, int start, int visibleCount, Rect plot, decimal min, decimal max)
     {
         var step = plot.Width / Math.Max(visibleCount, 1);
         var end = start + visibleCount;
@@ -318,7 +386,7 @@ public sealed class MarketChart : FrameworkElement
             .Select((candle, index) => new { candle.Time, Index = index })
             .ToDictionary(item => item.Time, item => item.Index);
 
-        foreach (var signal in signals.Where(signal => signal.LeaderSymbol == Symbol || signal.FailedSymbol == Symbol))
+        foreach (var signal in signals.Where(signal => signal.SetupType == SmtSetupType.HighLow && (signal.LeaderSymbol == Symbol || signal.FailedSymbol == Symbol)))
         {
             var previousSwingTime = Symbol == "ES" ? signal.EsPreviousSwingTime : signal.NqPreviousSwingTime;
             if (!candlesByTime.TryGetValue(signal.Time, out var currentIndex) ||
@@ -334,32 +402,231 @@ public sealed class MarketChart : FrameworkElement
 
             var previousValue = Symbol == "ES" ? signal.EsPreviousSwingValue : signal.NqPreviousSwingValue;
             var currentValue = Symbol == "ES" ? signal.EsCurrentValue : signal.NqCurrentValue;
-            var brush = signal.Type == SmtSignalType.Bearish ? _bearBrush : _bullBrush;
             var pen = signal.Type == SmtSignalType.Bearish ? _bearSignalPen : _bullSignalPen;
             var previousX = XForIndex(previousIndex, start, step, plot);
             var currentX = XForIndex(currentIndex, start, step, plot);
             var previousY = Scale(previousValue, min, max, plot);
             var currentY = Scale(currentValue, min, max, plot);
-            var isLeader = signal.LeaderSymbol == Symbol;
-            var textOffset = signal.Type == SmtSignalType.Bearish ? -46 : 26;
 
             context.DrawLine(pen, new Point(previousX, previousY), new Point(currentX, currentY));
-            context.DrawEllipse(null, pen, new Point(previousX, previousY), 7, 7);
-            context.DrawEllipse(brush, new Pen(Brushes.White, isLeader ? 2.4 : 1.4), new Point(currentX, currentY), isLeader ? 10 : 8, isLeader ? 10 : 8);
-
-            var title = BuildText(signal.Type == SmtSignalType.Bearish ? "Bearish SMT" : "Bullish SMT", 12, Brushes.White, FontWeights.Bold);
-            var detail = BuildText(signal.Reason, 10, Brushes.White, FontWeights.SemiBold);
-            var values = BuildText(signal.CalculationSummary, 10, _mutedTextBrush, FontWeights.SemiBold);
-            var labelWidth = Math.Max(Math.Max(title.Width, detail.Width), values.Width) + 16;
-            var labelHeight = title.Height + detail.Height + values.Height + 12;
-            var labelX = Math.Clamp(currentX - (labelWidth / 2), plot.Left + 4, plot.Right - labelWidth - 4);
-            var labelY = Math.Clamp(currentY + textOffset, plot.Top + 4, plot.Bottom - labelHeight - 4);
-
-            context.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(224, 15, 22, 36)), new Pen(brush, 1), new Rect(labelX, labelY, labelWidth, labelHeight), 6, 6);
-            context.DrawText(title, new Point(labelX + 8, labelY + 5));
-            context.DrawText(detail, new Point(labelX + 8, labelY + 5 + title.Height));
-            context.DrawText(values, new Point(labelX + 8, labelY + 5 + title.Height + detail.Height));
+            DrawSmtDot(context, currentX, currentY);
         }
+    }
+
+    private void DrawFvgSignals(DrawingContext context, IReadOnlyList<SmtSignal> signals, IReadOnlyList<Candle> candles, int start, int visibleCount, Rect plot, decimal min, decimal max)
+    {
+        var step = plot.Width / Math.Max(visibleCount, 1);
+        var end = start + visibleCount;
+        var candlesByTime = candles
+            .Select((candle, index) => new { candle.Time, Index = index })
+            .ToDictionary(item => item.Time, item => item.Index);
+
+        foreach (var signal in signals.Where(signal => (signal.SetupType is SmtSetupType.Fvg or SmtSetupType.InvertedFvg) && (signal.LeaderSymbol == Symbol || signal.FailedSymbol == Symbol)))
+        {
+            var lower = Symbol == "ES" ? signal.EsFvgLower : signal.NqFvgLower;
+            var upper = Symbol == "ES" ? signal.EsFvgUpper : signal.NqFvgUpper;
+            var startTime = Symbol == "ES" ? signal.EsFvgStartTime : signal.NqFvgStartTime;
+            var endTime = Symbol == "ES" ? signal.EsFvgEndTime : signal.NqFvgEndTime;
+            if (lower is null || upper is null || startTime is null || endTime is null ||
+                !candlesByTime.TryGetValue(startTime.Value, out var fvgStartIndex) ||
+                !candlesByTime.TryGetValue(endTime.Value, out var fvgEndIndex) ||
+                !candlesByTime.TryGetValue(signal.Time, out var currentIndex))
+            {
+                continue;
+            }
+
+            if (currentIndex < start || fvgStartIndex >= end)
+            {
+                continue;
+            }
+
+            var brush = signal.Type == SmtSignalType.Bearish ? _bearBrush : _bullBrush;
+            var border = new Pen(brush, signal.LeaderSymbol == Symbol ? 1.8 : 1.2);
+            var fill = signal.Type == SmtSignalType.Bearish
+                ? new SolidColorBrush(Color.FromArgb(42, 242, 54, 69))
+                : new SolidColorBrush(Color.FromArgb(42, 47, 107, 255));
+            var x1 = XForIndex(fvgStartIndex, start, step, plot) - (step / 2);
+            var x2 = XForIndex(Math.Max(fvgEndIndex, currentIndex), start, step, plot) + (step / 2);
+            var y1 = Scale(upper.Value, min, max, plot);
+            var y2 = Scale(lower.Value, min, max, plot);
+            var rect = new Rect(new Point(x1, y1), new Point(x2, y2));
+            context.DrawRectangle(fill, border, rect);
+
+            var currentValue = Symbol == "ES" ? signal.EsCurrentValue : signal.NqCurrentValue;
+            var currentX = XForIndex(currentIndex, start, step, plot);
+            var currentY = Scale(currentValue, min, max, plot);
+            DrawSmtDot(context, currentX, currentY);
+        }
+    }
+
+    private void DrawSmtDot(DrawingContext context, double x, double y)
+    {
+        context.DrawEllipse(_smtDotBrush, _smtDotPen, new Point(x, y), 5.5, 5.5);
+    }
+
+    private void DrawFocusedAnnotations(DrawingContext context, IReadOnlyList<FocusedChartAnnotation> annotations, IReadOnlyList<Candle> candles, int start, int visibleCount, Rect plot, decimal min, decimal max)
+    {
+        if (annotations.Count == 0)
+        {
+            return;
+        }
+
+        var step = plot.Width / Math.Max(visibleCount, 1);
+        var visibleStart = candles[start].Time;
+        var visibleEnd = candles[Math.Min(candles.Count - 1, start + visibleCount - 1)].Time;
+
+        foreach (var annotation in annotations.Where(annotation => annotation.EndTime >= visibleStart && annotation.StartTime <= visibleEnd))
+        {
+            switch (annotation.Kind)
+            {
+                case FocusedAnnotationKind.Bos:
+                    DrawBosAnnotation(context, annotation, candles, start, step, plot, min, max);
+                    break;
+                case FocusedAnnotationKind.Fvg:
+                case FocusedAnnotationKind.Ifvg:
+                    DrawGapAnnotation(context, annotation, candles, start, step, plot, min, max);
+                    break;
+                case FocusedAnnotationKind.HalfBox:
+                    DrawHalfBoxAnnotation(context, annotation, candles, start, step, plot, min, max);
+                    break;
+                case FocusedAnnotationKind.StopTakeProfit:
+                    DrawStopTakeProfitAnnotation(context, annotation, candles, start, step, plot, min, max);
+                    break;
+            }
+        }
+    }
+
+    private void DrawBosAnnotation(DrawingContext context, FocusedChartAnnotation annotation, IReadOnlyList<Candle> candles, int start, double step, Rect plot, decimal min, decimal max)
+    {
+        if (!TryGetX(annotation.StartTime, candles, start, step, plot, out var x1) ||
+            !TryGetX(annotation.EndTime, candles, start, step, plot, out var x2) ||
+            annotation.SecondaryPrice is null)
+        {
+            return;
+        }
+
+        var y1 = Scale(annotation.Price, min, max, plot);
+        var y2 = Scale(annotation.SecondaryPrice.Value, min, max, plot);
+        context.DrawLine(_bosPen, new Point(x1, y1), new Point(x2, y2));
+        context.DrawLine(new Pen(_bosPen.Brush, 1) { DashStyle = DashStyles.Dash }, new Point(x1, y1), new Point(x2, y1));
+        DrawSmallLabel(context, "BOS", x2 + 6, y2 - 22, _bosPen.Brush, Brushes.White);
+    }
+
+    private void DrawGapAnnotation(DrawingContext context, FocusedChartAnnotation annotation, IReadOnlyList<Candle> candles, int start, double step, Rect plot, decimal min, decimal max)
+    {
+        if (!TryGetX(annotation.StartTime, candles, start, step, plot, out var x1) ||
+            !TryGetX(annotation.EndTime, candles, start, step, plot, out var x2) ||
+            annotation.SecondaryPrice is null)
+        {
+            return;
+        }
+
+        var upper = Math.Max(annotation.Price, annotation.SecondaryPrice.Value);
+        var lower = Math.Min(annotation.Price, annotation.SecondaryPrice.Value);
+        var rect = new Rect(
+            Math.Min(x1, x2) - (step / 2),
+            Scale(upper, min, max, plot),
+            Math.Max(step, Math.Abs(x2 - x1) + step),
+            Math.Max(2, Scale(lower, min, max, plot) - Scale(upper, min, max, plot)));
+
+        if (annotation.Kind == FocusedAnnotationKind.Ifvg)
+        {
+            context.DrawRectangle(_ifvgFillBrush, _ifvgPen, rect);
+            DrawSmallLabel(context, "IFVG", rect.Right + 4, rect.Top - 2, _ifvgPen.Brush, Brushes.White);
+            return;
+        }
+
+        var pen = annotation.Direction == SmtSignalType.Bearish ? _bearSignalPen : _bullSignalPen;
+        context.DrawRectangle(_fvgFillBrush, new Pen(pen.Brush, 1.2), rect);
+    }
+
+    private void DrawHalfBoxAnnotation(DrawingContext context, FocusedChartAnnotation annotation, IReadOnlyList<Candle> candles, int start, double step, Rect plot, decimal min, decimal max)
+    {
+        if (!TryGetX(annotation.StartTime, candles, start, step, plot, out var x1) ||
+            !TryGetX(annotation.EndTime, candles, start, step, plot, out var x2) ||
+            annotation.SecondaryPrice is null ||
+            annotation.TertiaryPrice is null)
+        {
+            return;
+        }
+
+        var top = Math.Min(annotation.Price, annotation.TertiaryPrice.Value);
+        var bottom = Math.Max(annotation.Price, annotation.TertiaryPrice.Value);
+        var rect = new Rect(
+            Math.Min(x1, x2),
+            Scale(bottom, min, max, plot),
+            Math.Max(step * 3, Math.Abs(x2 - x1)),
+            Math.Max(2, Scale(top, min, max, plot) - Scale(bottom, min, max, plot)));
+
+        context.DrawRectangle(new SolidColorBrush(Color.FromArgb(26, 37, 99, 235)), _halfBoxPen, rect);
+        DrawLevel(context, "0", annotation.Price, rect.Left, rect.Right, plot, min, max, _halfBoxPen);
+        DrawLevel(context, "0.5 Entry", annotation.SecondaryPrice.Value, rect.Left, rect.Right, plot, min, max, _entryPen);
+        DrawLevel(context, "1", annotation.TertiaryPrice.Value, rect.Left, rect.Right, plot, min, max, _halfBoxPen);
+    }
+
+    private void DrawStopTakeProfitAnnotation(DrawingContext context, FocusedChartAnnotation annotation, IReadOnlyList<Candle> candles, int start, double step, Rect plot, decimal min, decimal max)
+    {
+        if (!TryGetX(annotation.StartTime, candles, start, step, plot, out var x1) ||
+            !TryGetX(annotation.EndTime, candles, start, step, plot, out var x2) ||
+            annotation.SecondaryPrice is null ||
+            annotation.TertiaryPrice is null)
+        {
+            return;
+        }
+
+        var entry = annotation.Price;
+        var stop = annotation.SecondaryPrice.Value;
+        var target = annotation.TertiaryPrice.Value;
+        var xLeft = Math.Min(x1, x2);
+        var width = Math.Max(step * 4, Math.Abs(x2 - x1));
+        DrawTradeZone(context, xLeft, width, entry, stop, plot, min, max, _riskBrush, "Stop Loss: -10 points");
+        DrawTradeZone(context, xLeft, width, entry, target, plot, min, max, _rewardBrush, "Take Profit: +200 points");
+        DrawLevel(context, "Entry", entry, xLeft, xLeft + width, plot, min, max, _entryPen);
+    }
+
+    private void DrawTradeZone(DrawingContext context, double x, double width, decimal entry, decimal target, Rect plot, decimal min, decimal max, Brush brush, string label)
+    {
+        var y1 = Scale(entry, min, max, plot);
+        var y2 = Scale(target, min, max, plot);
+        var rect = new Rect(x, Math.Min(y1, y2), width, Math.Max(2, Math.Abs(y2 - y1)));
+        context.DrawRectangle(brush, null, rect);
+        DrawSmallLabel(context, label, rect.Right + 5, rect.Top + 3, new SolidColorBrush(Color.FromRgb(31, 41, 55)), Brushes.White);
+    }
+
+    private void DrawLevel(DrawingContext context, string label, decimal price, double x1, double x2, Rect plot, decimal min, decimal max, Pen pen)
+    {
+        var y = Scale(price, min, max, plot);
+        context.DrawLine(pen, new Point(x1, y), new Point(x2, y));
+        DrawSmallLabel(context, label, x2 + 5, y - 10, pen.Brush, Brushes.White);
+    }
+
+    private void DrawSmallLabel(DrawingContext context, string label, double x, double y, Brush background, Brush foreground)
+    {
+        var text = BuildText(label, 10, foreground, FontWeights.Bold);
+        var rect = new Rect(x, y, text.Width + 12, text.Height + 6);
+        context.DrawRoundedRectangle(background, null, rect, 3, 3);
+        context.DrawText(text, new Point(rect.Left + 6, rect.Top + 3));
+    }
+
+    private static bool TryGetX(DateTime time, IReadOnlyList<Candle> candles, int start, double step, Rect plot, out double x)
+    {
+        var index = -1;
+        for (var i = 0; i < candles.Count; i++)
+        {
+            if (candles[i].Time >= time)
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0)
+        {
+            index = candles.Count - 1;
+        }
+
+        x = XForIndex(index, start, step, plot);
+        return true;
     }
 
     private void DrawTimeScale(DrawingContext context, IReadOnlyList<Candle> candles, int start, int visibleCount, Rect plot)
@@ -373,7 +640,7 @@ public sealed class MarketChart : FrameworkElement
         {
             var candle = candles[index];
             var x = XForIndex(index, start, step, plot);
-            var label = BuildText(candle.Time.ToString("HH:mm"), 10, _mutedTextBrush, FontWeights.Normal);
+            var label = BuildText(candle.Time.ToString("HH:mm"), 12, _mutedTextBrush, FontWeights.SemiBold);
             context.DrawText(label, new Point(Math.Clamp(x - (label.Width / 2), plot.Left, plot.Right - label.Width), plot.Bottom + 9));
         }
     }
@@ -399,13 +666,23 @@ public sealed class MarketChart : FrameworkElement
         context.DrawLine(_crosshairPen, new Point(plot.Left, y), new Point(plot.Right, y));
 
         var text = $"{candle.Time:MM-dd HH:mm}  O {candle.Open:0.00}  H {candle.High:0.00}  L {candle.Low:0.00}  C {candle.Close:0.00}";
-        var tooltip = BuildText(text, 11, Brushes.White, FontWeights.SemiBold);
+        var tooltip = BuildText(text, 11, _mutedTextBrush, FontWeights.SemiBold);
         var tooltipWidth = tooltip.Width + 16;
         var tooltipHeight = tooltip.Height + 10;
         var tooltipX = Math.Clamp(x + 10, plot.Left + 4, plot.Right - tooltipWidth - 4);
         var tooltipY = Math.Clamp(y - tooltipHeight - 10, plot.Top + 4, plot.Bottom - tooltipHeight - 4);
-        context.DrawRoundedRectangle(_tooltipBrush, new Pen(new SolidColorBrush(Color.FromRgb(70, 90, 120)), 1), new Rect(tooltipX, tooltipY, tooltipWidth, tooltipHeight), 5, 5);
+        context.DrawRoundedRectangle(_tooltipBrush, new Pen(new SolidColorBrush(Color.FromRgb(205, 214, 226)), 1), new Rect(tooltipX, tooltipY, tooltipWidth, tooltipHeight), 5, 5);
         context.DrawText(tooltip, new Point(tooltipX + 8, tooltipY + 5));
+
+        var priceLabel = BuildText(candle.Close.ToString("N2"), 11, Brushes.White, FontWeights.Bold);
+        var priceRect = new Rect(plot.Right + 4, y - 11, priceLabel.Width + 14, 22);
+        context.DrawRoundedRectangle(new SolidColorBrush(Color.FromRgb(31, 41, 55)), null, priceRect, 3, 3);
+        context.DrawText(priceLabel, new Point(priceRect.Left + 7, priceRect.Top + 3));
+
+        var timeLabel = BuildText(candle.Time.ToString("MM-dd HH:mm"), 11, Brushes.White, FontWeights.Bold);
+        var timeRect = new Rect(Math.Clamp(x - ((timeLabel.Width + 16) / 2), plot.Left, plot.Right - timeLabel.Width - 16), plot.Bottom + 6, timeLabel.Width + 16, 22);
+        context.DrawRoundedRectangle(new SolidColorBrush(Color.FromRgb(31, 41, 55)), null, timeRect, 3, 3);
+        context.DrawText(timeLabel, new Point(timeRect.Left + 8, timeRect.Top + 3));
     }
 
     private void UpdateCrosshair(IReadOnlyList<Candle> candles, Point position, Rect plot)
@@ -460,7 +737,7 @@ public sealed class MarketChart : FrameworkElement
 
     private static Rect GetPlot(double width, double height)
     {
-        var margin = new Thickness(18, 18, 62, 34);
+        var margin = new Thickness(10, 0, 72, 34);
         return new Rect(margin.Left, margin.Top, Math.Max(20, width - margin.Left - margin.Right), Math.Max(20, height - margin.Top - margin.Bottom));
     }
 

@@ -8,6 +8,7 @@ public sealed class MockMarketDataProvider
     {
         var interval = timeframe switch
         {
+            "30s" => TimeSpan.FromSeconds(30),
             "5m" => TimeSpan.FromMinutes(5),
             "15m" => TimeSpan.FromMinutes(15),
             _ => TimeSpan.FromMinutes(1)

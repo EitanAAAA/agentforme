@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Text.Json;
 using SMTAgent.Core.Models;
 
@@ -17,22 +18,29 @@ public sealed class YahooFinanceMarketDataProvider
         HttpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
 
-    public async Task<MarketDataSet> FetchAsync(CancellationToken cancellationToken)
+    public async Task<MarketDataSet> FetchAsync(string timeframe, CancellationToken cancellationToken)
     {
-        var esTask = FetchSymbolAsync("ES", "ES=F", cancellationToken);
-        var nqTask = FetchSymbolAsync("NQ", "NQ=F", cancellationToken);
+        var interval = ToYahooInterval(timeframe);
+        var esTask = FetchSymbolAsync("ES", "ES=F", interval, cancellationToken);
+        var nqTask = FetchSymbolAsync("NQ", "NQ=F", interval, cancellationToken);
         await Task.WhenAll(esTask, nqTask);
 
         return SyncByTimestamp(await esTask, await nqTask);
     }
 
+    public Task<IReadOnlyList<Candle>> FetchNqAsync(string timeframe, CancellationToken cancellationToken)
+    {
+        return FetchSymbolAsync("NQ", "NQ=F", ToYahooInterval(timeframe), cancellationToken);
+    }
+
     private static async Task<IReadOnlyList<Candle>> FetchSymbolAsync(
         string displaySymbol,
         string yahooSymbol,
+        string interval,
         CancellationToken cancellationToken)
     {
         var encodedSymbol = WebUtility.UrlEncode(yahooSymbol);
-        var url = $"https://query1.finance.yahoo.com/v8/finance/chart/{encodedSymbol}?range=5d&interval=15m";
+        var url = $"https://query1.finance.yahoo.com/v8/finance/chart/{encodedSymbol}?range=5d&interval={interval}";
         using var response = await GetWithRetryAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
 
@@ -95,6 +103,18 @@ public sealed class YahooFinanceMarketDataProvider
         response.Dispose();
         await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         return await HttpClient.GetAsync(url, cancellationToken);
+    }
+
+    private static string ToYahooInterval(string timeframe)
+    {
+        return timeframe switch
+        {
+            "1m" => "1m",
+            "5m" => "5m",
+            "15m" => "15m",
+            "30s" => "1m",
+            _ => "15m"
+        };
     }
 
     private static MarketDataSet SyncByTimestamp(IReadOnlyList<Candle> esCandles, IReadOnlyList<Candle> nqCandles)

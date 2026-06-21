@@ -8,6 +8,17 @@ public sealed class SignalTitleConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
+        if (value is SmtSetupType setupType)
+        {
+            return setupType switch
+            {
+                SmtSetupType.HighLow => "SMT H/L",
+                SmtSetupType.Fvg => "SMT FVG",
+                SmtSetupType.InvertedFvg => "SMT IFVG",
+                _ => "SMT"
+            };
+        }
+
         return value switch
         {
             SmtSignalType.Bullish => "Bullish SMT",

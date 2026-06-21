@@ -3,6 +3,7 @@ namespace SMTAgent.Core.Models;
 public sealed record SmtSignal(
     string SignalId,
     DateTime Time,
+    SmtSetupType SetupType,
     SmtSignalType Type,
     SmtSignalStatus Status,
     string LeaderSymbol,
@@ -23,4 +24,12 @@ public sealed record SmtSignal(
     decimal NqPreviousSwingValue,
     decimal NqCurrentValue,
     DateTime EsPreviousSwingTime,
-    DateTime NqPreviousSwingTime);
+    DateTime NqPreviousSwingTime,
+    decimal? EsFvgLower,
+    decimal? EsFvgUpper,
+    DateTime? EsFvgStartTime,
+    DateTime? EsFvgEndTime,
+    decimal? NqFvgLower,
+    decimal? NqFvgUpper,
+    DateTime? NqFvgStartTime,
+    DateTime? NqFvgEndTime);

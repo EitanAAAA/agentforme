@@ -12,10 +12,32 @@ public enum SmtSignalType
     Bearish
 }
 
+public enum SmtSetupType
+{
+    HighLow,
+    Fvg,
+    InvertedFvg
+}
+
 public enum SmtSignalStatus
 {
     Raw,
     Confirmed
+}
+
+public enum FairValueGapType
+{
+    Bullish,
+    Bearish
+}
+
+public enum FocusedAnnotationKind
+{
+    Bos,
+    Fvg,
+    Ifvg,
+    HalfBox,
+    StopTakeProfit
 }
 
 public enum DetectionMode

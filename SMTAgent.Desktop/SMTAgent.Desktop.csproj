@@ -1,7 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\SMTAgent.Core\SMTAgent.Core.csproj" />
+    <ProjectReference Include="..\SMTAgent.Core\SMTAgent.Core.csproj" ReferenceOutputAssembly="false" />
+    <Compile Include="..\SMTAgent.Core\**\*.cs"
+             Exclude="..\SMTAgent.Core\bin\**;..\SMTAgent.Core\obj\**"
+             Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -11,5 +14,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <Target Name="SignLocalBuildOutput" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\tools\Sign-LocalBuild.ps1&quot; -TargetPath &quot;$(TargetPath)&quot;" />
+  </Target>
 
 </Project>

@@ -34,7 +34,6 @@ public sealed class AgentRuntime
 
         Stop();
         ResetState();
-        Settings.Timeframe = "15m";
         _cancellationTokenSource = new CancellationTokenSource();
         _runTask = RunAsync(_cancellationTokenSource.Token);
     }
@@ -88,21 +87,21 @@ public sealed class AgentRuntime
 
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        PublishSnapshot(Settings.DataProvider, DataConnectionStatus.Updating, "Updating delayed Yahoo 15m candles...");
+        PublishSnapshot(Settings.DataProvider, DataConnectionStatus.Updating, $"Updating delayed Yahoo {Settings.Timeframe} candles...");
 
         try
         {
             var data = Settings.DataProvider == DataProviderMode.Mock
-                ? _mockMarketDataProvider.Generate("15m")
-                : await _yahooFinanceMarketDataProvider.FetchAsync(cancellationToken);
+                ? _mockMarketDataProvider.Generate(Settings.Timeframe)
+                : await _yahooFinanceMarketDataProvider.FetchAsync(Settings.Timeframe, cancellationToken);
 
             ReplaceMarketData(data);
             DetectSwings();
 
             var status = GetDataStatus(data);
             var message = Settings.DataProvider == DataProviderMode.Mock
-                ? "Manual demo data. Not market data."
-                : "DELAYED DATA - live updating view";
+                ? $"Manual demo data - {Settings.Timeframe}. Not market data."
+                : $"DELAYED DATA - live updating {Settings.Timeframe} view";
 
             PublishSnapshot(Settings.DataProvider, status, message);
             DetectSignals();

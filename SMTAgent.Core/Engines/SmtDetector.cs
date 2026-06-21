@@ -12,10 +12,10 @@ public sealed class SmtDetector
         AgentSettings settings)
     {
         var signalsById = new Dictionary<string, SmtSignal>();
-        var consumedLeaderSwings = new HashSet<string>();
-        var lastSignalByZone = new Dictionary<string, int>();
         var count = Math.Min(esCandles.Count, nqCandles.Count);
         var tolerance = settings.TickTolerance * settings.TickSize;
+        var esFvgs = DetectFvgs(esCandles);
+        var nqFvgs = DetectFvgs(nqCandles);
 
         for (var index = 0; index < count; index++)
         {
@@ -24,30 +24,21 @@ public sealed class SmtDetector
                 continue;
             }
 
-            DetectAtIndex(
-                signalsById,
-                consumedLeaderSwings,
-                lastSignalByZone,
-                esCandles,
-                nqCandles,
-                esSwings,
-                nqSwings,
-                index,
-                tolerance,
-                settings);
+            DetectHighLow(signalsById, esCandles, nqCandles, esSwings, nqSwings, index, tolerance, settings);
+            DetectFvgTap(signalsById, esCandles, nqCandles, esFvgs, nqFvgs, index, tolerance);
+            DetectInvertedFvg(signalsById, esCandles, nqCandles, esFvgs, nqFvgs, index, tolerance);
         }
 
         return signalsById.Values
             .OrderBy(signal => signal.Time)
+            .ThenBy(signal => signal.SetupType)
             .ThenBy(signal => signal.Type)
             .ThenBy(signal => signal.LeaderSymbol)
             .ToList();
     }
 
-    private static void DetectAtIndex(
+    private static void DetectHighLow(
         IDictionary<string, SmtSignal> signalsById,
-        ISet<string> consumedLeaderSwings,
-        IDictionary<string, int> lastSignalByZone,
         IReadOnlyList<Candle> esCandles,
         IReadOnlyList<Candle> nqCandles,
         IReadOnlyList<SwingPoint> esSwings,
@@ -63,214 +54,343 @@ public sealed class SmtDetector
         var nqHigh = LatestConfirmedSwingBefore(nqSwings, SwingPointType.High, index, settings.SwingStrength, settings.SwingLookbackCandles);
         if (esHigh is not null && nqHigh is not null)
         {
-            DetectBearish(signalsById, consumedLeaderSwings, lastSignalByZone, es, nq, esHigh, nqHigh, index, tolerance, settings);
+            var esBreak = es.High > esHigh.Price + tolerance;
+            var nqBreak = nq.High > nqHigh.Price + tolerance;
+            if (esBreak ^ nqBreak)
+            {
+                var leader = esBreak ? es : nq;
+                var failed = esBreak ? nq : es;
+                AddHighLowSignal(
+                    signalsById,
+                    SmtSignalType.Bearish,
+                    leader,
+                    failed,
+                    esHigh,
+                    nqHigh,
+                    es.High,
+                    nq.High,
+                    tolerance);
+            }
         }
 
         var esLow = LatestConfirmedSwingBefore(esSwings, SwingPointType.Low, index, settings.SwingStrength, settings.SwingLookbackCandles);
         var nqLow = LatestConfirmedSwingBefore(nqSwings, SwingPointType.Low, index, settings.SwingStrength, settings.SwingLookbackCandles);
         if (esLow is not null && nqLow is not null)
         {
-            DetectBullish(signalsById, consumedLeaderSwings, lastSignalByZone, es, nq, esLow, nqLow, index, tolerance, settings);
+            var esBreak = es.Low < esLow.Price - tolerance;
+            var nqBreak = nq.Low < nqLow.Price - tolerance;
+            if (esBreak ^ nqBreak)
+            {
+                var leader = esBreak ? es : nq;
+                var failed = esBreak ? nq : es;
+                AddHighLowSignal(
+                    signalsById,
+                    SmtSignalType.Bullish,
+                    leader,
+                    failed,
+                    esLow,
+                    nqLow,
+                    es.Low,
+                    nq.Low,
+                    tolerance);
+            }
         }
     }
 
-    private static void DetectBearish(
+    private static void DetectFvgTap(
         IDictionary<string, SmtSignal> signalsById,
-        ISet<string> consumedLeaderSwings,
-        IDictionary<string, int> lastSignalByZone,
-        Candle es,
-        Candle nq,
-        SwingPoint esHigh,
-        SwingPoint nqHigh,
+        IReadOnlyList<Candle> esCandles,
+        IReadOnlyList<Candle> nqCandles,
+        IReadOnlyList<FairValueGap> esFvgs,
+        IReadOnlyList<FairValueGap> nqFvgs,
         int index,
-        decimal tolerance,
-        AgentSettings settings)
+        decimal tolerance)
     {
-        var esBreak = es.High > esHigh.Price + tolerance;
-        var nqBreak = nq.High > nqHigh.Price + tolerance;
-        if (esBreak == nqBreak)
+        foreach (var fvgType in new[] { FairValueGapType.Bullish, FairValueGapType.Bearish })
         {
-            return;
-        }
+            var esFvg = LatestActiveFvgBefore(esFvgs, esCandles, fvgType, index, tolerance);
+            var nqFvg = LatestActiveFvgBefore(nqFvgs, nqCandles, fvgType, index, tolerance);
+            if (esFvg is null || nqFvg is null)
+            {
+                continue;
+            }
 
-        var leader = esBreak ? es : nq;
-        var failed = esBreak ? nq : es;
-        var leaderSwing = esBreak ? esHigh : nqHigh;
-        var failedSwing = esBreak ? nqHigh : esHigh;
-        var leaderConfirmed = leader.High > leaderSwing.Price + tolerance && leader.Close < leaderSwing.Price;
-        if (!TryGetStatus(settings.DetectionMode, leaderConfirmed, out var status))
-        {
-            return;
-        }
+            var es = esCandles[index];
+            var nq = nqCandles[index];
+            var esTapped = WickTouches(es, esFvg, tolerance);
+            var nqTapped = WickTouches(nq, nqFvg, tolerance);
+            if (!(esTapped ^ nqTapped))
+            {
+                continue;
+            }
 
-        AddSignal(
-            signalsById,
-            consumedLeaderSwings,
-            lastSignalByZone,
-            SmtSignalType.Bearish,
-            status,
-            leader,
-            failed,
-            leaderSwing,
-            failedSwing,
-            esHigh,
-            nqHigh,
-            es.High,
-            nq.High,
-            tolerance,
-            index,
-            settings);
+            var leader = esTapped ? es : nq;
+            var failed = esTapped ? nq : es;
+            var signalType = fvgType == FairValueGapType.Bullish ? SmtSignalType.Bullish : SmtSignalType.Bearish;
+            AddFvgSignal(
+                signalsById,
+                SmtSetupType.Fvg,
+                signalType,
+                leader,
+                failed,
+                esFvg,
+                nqFvg,
+                CurrentFvgTouchValue(es, esFvg),
+                CurrentFvgTouchValue(nq, nqFvg),
+                $"{leader.Symbol} tapped, {failed.Symbol} failed",
+                tolerance);
+        }
     }
 
-    private static void DetectBullish(
+    private static void DetectInvertedFvg(
         IDictionary<string, SmtSignal> signalsById,
-        ISet<string> consumedLeaderSwings,
-        IDictionary<string, int> lastSignalByZone,
-        Candle es,
-        Candle nq,
-        SwingPoint esLow,
-        SwingPoint nqLow,
+        IReadOnlyList<Candle> esCandles,
+        IReadOnlyList<Candle> nqCandles,
+        IReadOnlyList<FairValueGap> esFvgs,
+        IReadOnlyList<FairValueGap> nqFvgs,
         int index,
-        decimal tolerance,
-        AgentSettings settings)
+        decimal tolerance)
     {
-        var esBreak = es.Low < esLow.Price - tolerance;
-        var nqBreak = nq.Low < nqLow.Price - tolerance;
-        if (esBreak == nqBreak)
+        foreach (var fvgType in new[] { FairValueGapType.Bullish, FairValueGapType.Bearish })
         {
-            return;
-        }
+            var esFvg = LatestActiveFvgBefore(esFvgs, esCandles, fvgType, index, tolerance);
+            var nqFvg = LatestActiveFvgBefore(nqFvgs, nqCandles, fvgType, index, tolerance);
+            if (esFvg is null || nqFvg is null)
+            {
+                continue;
+            }
 
-        var leader = esBreak ? es : nq;
-        var failed = esBreak ? nq : es;
-        var leaderSwing = esBreak ? esLow : nqLow;
-        var failedSwing = esBreak ? nqLow : esLow;
-        var leaderConfirmed = leader.Low < leaderSwing.Price - tolerance && leader.Close > leaderSwing.Price;
-        if (!TryGetStatus(settings.DetectionMode, leaderConfirmed, out var status))
-        {
-            return;
-        }
+            var es = esCandles[index];
+            var nq = nqCandles[index];
+            var esInverted = ClosesThroughFvg(es, esFvg, tolerance);
+            var nqInverted = ClosesThroughFvg(nq, nqFvg, tolerance);
+            if (!(esInverted ^ nqInverted))
+            {
+                continue;
+            }
 
-        AddSignal(
-            signalsById,
-            consumedLeaderSwings,
-            lastSignalByZone,
-            SmtSignalType.Bullish,
-            status,
-            leader,
-            failed,
-            leaderSwing,
-            failedSwing,
-            esLow,
-            nqLow,
-            es.Low,
-            nq.Low,
-            tolerance,
-            index,
-            settings);
+            var leader = esInverted ? es : nq;
+            var failed = esInverted ? nq : es;
+            var signalType = fvgType == FairValueGapType.Bullish ? SmtSignalType.Bearish : SmtSignalType.Bullish;
+            AddFvgSignal(
+                signalsById,
+                SmtSetupType.InvertedFvg,
+                signalType,
+                leader,
+                failed,
+                esFvg,
+                nqFvg,
+                es.Close,
+                nq.Close,
+                $"{leader.Symbol} inverted, {failed.Symbol} held",
+                tolerance);
+        }
     }
 
-    private static void AddSignal(
+    private static IReadOnlyList<FairValueGap> DetectFvgs(IReadOnlyList<Candle> candles)
+    {
+        var fvgs = new List<FairValueGap>();
+        for (var index = 2; index < candles.Count; index++)
+        {
+            var first = candles[index - 2];
+            var third = candles[index];
+
+            if (first.High < third.Low)
+            {
+                fvgs.Add(new FairValueGap(
+                    third.Symbol,
+                    FairValueGapType.Bullish,
+                    index,
+                    first.Time,
+                    third.Time,
+                    first.High,
+                    third.Low));
+            }
+
+            if (first.Low > third.High)
+            {
+                fvgs.Add(new FairValueGap(
+                    third.Symbol,
+                    FairValueGapType.Bearish,
+                    index,
+                    first.Time,
+                    third.Time,
+                    third.High,
+                    first.Low));
+            }
+        }
+
+        return fvgs;
+    }
+
+    private static void AddHighLowSignal(
         IDictionary<string, SmtSignal> signalsById,
-        ISet<string> consumedLeaderSwings,
-        IDictionary<string, int> lastSignalByZone,
         SmtSignalType type,
-        SmtSignalStatus status,
         Candle leader,
         Candle failed,
-        SwingPoint leaderSwing,
-        SwingPoint failedSwing,
-        SwingPoint esReferenceSwing,
-        SwingPoint nqReferenceSwing,
+        SwingPoint esSwing,
+        SwingPoint nqSwing,
         decimal esCurrentValue,
         decimal nqCurrentValue,
-        decimal tolerance,
-        int index,
-        AgentSettings settings)
+        decimal tolerance)
     {
-        var leaderSwingId = SwingId(leaderSwing);
-        var failedSwingId = SwingId(failedSwing);
-        var consumedKey = $"{type}:{leader.Symbol}:{leaderSwingId}";
-        var signalId = $"{type}:{leader.Symbol}:{failed.Symbol}:{leaderSwingId}:{failedSwingId}:{leader.Time:O}";
-        if (consumedLeaderSwings.Contains(consumedKey) && !signalsById.ContainsKey(signalId))
+        var leaderSwing = leader.Symbol == "ES" ? esSwing : nqSwing;
+        var failedSwing = failed.Symbol == "ES" ? esSwing : nqSwing;
+        var signalId = $"HL:{type}:{leader.Symbol}:{SwingId(leaderSwing)}:{SwingId(failedSwing)}";
+        if (signalsById.ContainsKey(signalId))
         {
             return;
         }
 
-        var zoneKey = $"{type}:{leader.Symbol}:{leaderSwingId}:{failedSwingId}";
-        if (lastSignalByZone.TryGetValue(zoneKey, out var lastSignalIndex) &&
-            index - lastSignalIndex < settings.AlertCooldownCandles &&
-            !signalsById.ContainsKey(signalId))
-        {
-            return;
-        }
+        var leaderPrevious = leader.Symbol == "ES" ? esSwing.Price : nqSwing.Price;
+        var failedPrevious = failed.Symbol == "ES" ? esSwing.Price : nqSwing.Price;
+        var leaderCurrent = leader.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
+        var failedCurrent = failed.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
+        var side = type == SmtSignalType.Bearish ? "high" : "low";
 
-        var mode = status == SmtSignalStatus.Confirmed ? DetectionMode.CloseConfirmation : DetectionMode.WickBreak;
-        var leaderCurrentValue = leader.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
-        var failedCurrentValue = failed.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
-        var calculationSummary = BuildCalculationSummary(
-            type,
-            leader.Symbol,
-            leaderSwing.Price,
-            leaderCurrentValue,
-            failed.Symbol,
-            failedSwing.Price,
-            failedCurrentValue,
-            tolerance,
-            status);
-
-        var signal = new SmtSignal(
+        signalsById[signalId] = new SmtSignal(
             signalId,
             leader.Time,
+            SmtSetupType.HighLow,
             type,
-            status,
+            SmtSignalStatus.Confirmed,
             leader.Symbol,
             failed.Symbol,
-            BuildReason(type, leader.Symbol, failed.Symbol, status),
-            status == SmtSignalStatus.Raw ? "Waiting for confirmation" : "Confirmed SMT",
-            calculationSummary,
-            mode,
-            leaderSwingId,
-            failedSwingId,
-            leaderSwing.Price,
-            leaderCurrentValue,
-            failedSwing.Price,
-            failedCurrentValue,
+            $"SMT H/L: {leader.Symbol} broke {side}, {failed.Symbol} failed",
+            "SMT H/L",
+            $"{leader.Symbol} {leaderPrevious:0.00}->{leaderCurrent:0.00}; {failed.Symbol} {failedPrevious:0.00}->{failedCurrent:0.00}",
+            DetectionMode.WickBreak,
+            SwingId(leaderSwing),
+            SwingId(failedSwing),
+            leaderPrevious,
+            leaderCurrent,
+            failedPrevious,
+            failedCurrent,
             tolerance,
-            esReferenceSwing.Price,
+            esSwing.Price,
             esCurrentValue,
-            nqReferenceSwing.Price,
+            nqSwing.Price,
             nqCurrentValue,
-            esReferenceSwing.Time,
-            nqReferenceSwing.Time);
+            esSwing.Time,
+            nqSwing.Time,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    }
 
-        if (signalsById.TryGetValue(signalId, out var existing) &&
-            existing.Status == SmtSignalStatus.Confirmed)
+    private static void AddFvgSignal(
+        IDictionary<string, SmtSignal> signalsById,
+        SmtSetupType setupType,
+        SmtSignalType signalType,
+        Candle leader,
+        Candle failed,
+        FairValueGap esFvg,
+        FairValueGap nqFvg,
+        decimal esCurrentValue,
+        decimal nqCurrentValue,
+        string label,
+        decimal tolerance)
+    {
+        var leaderFvg = leader.Symbol == "ES" ? esFvg : nqFvg;
+        var failedFvg = failed.Symbol == "ES" ? esFvg : nqFvg;
+        var prefix = setupType == SmtSetupType.Fvg ? "FVG" : "IFVG";
+        var signalId = $"{prefix}:{leader.Symbol}:{leaderFvg.GapId}:{failedFvg.GapId}";
+        if (signalsById.ContainsKey(signalId))
         {
             return;
         }
 
-        signalsById[signalId] = signal;
-        consumedLeaderSwings.Add(consumedKey);
-        lastSignalByZone[zoneKey] = index;
+        var esMid = Mid(esFvg);
+        var nqMid = Mid(nqFvg);
+        var leaderPrevious = leader.Symbol == "ES" ? esMid : nqMid;
+        var failedPrevious = failed.Symbol == "ES" ? esMid : nqMid;
+        var leaderCurrent = leader.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
+        var failedCurrent = failed.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
+        var setupLabel = setupType == SmtSetupType.Fvg ? "SMT FVG" : "SMT IFVG";
+
+        signalsById[signalId] = new SmtSignal(
+            signalId,
+            leader.Time,
+            setupType,
+            signalType,
+            SmtSignalStatus.Confirmed,
+            leader.Symbol,
+            failed.Symbol,
+            $"{setupLabel}: {label}",
+            setupLabel,
+            $"{leader.Symbol} zone {leaderFvg.Lower:0.00}-{leaderFvg.Upper:0.00}; {failed.Symbol} zone {failedFvg.Lower:0.00}-{failedFvg.Upper:0.00}",
+            setupType == SmtSetupType.Fvg ? DetectionMode.WickBreak : DetectionMode.CloseConfirmation,
+            leaderFvg.GapId,
+            failedFvg.GapId,
+            leaderPrevious,
+            leaderCurrent,
+            failedPrevious,
+            failedCurrent,
+            tolerance,
+            esMid,
+            esCurrentValue,
+            nqMid,
+            nqCurrentValue,
+            esFvg.EndTime,
+            nqFvg.EndTime,
+            esFvg.Lower,
+            esFvg.Upper,
+            esFvg.StartTime,
+            esFvg.EndTime,
+            nqFvg.Lower,
+            nqFvg.Upper,
+            nqFvg.StartTime,
+            nqFvg.EndTime);
     }
 
-    private static bool TryGetStatus(DetectionMode mode, bool leaderConfirmed, out SmtSignalStatus status)
+    private static FairValueGap? LatestActiveFvgBefore(
+        IReadOnlyList<FairValueGap> fvgs,
+        IReadOnlyList<Candle> candles,
+        FairValueGapType type,
+        int index,
+        decimal tolerance)
     {
-        status = SmtSignalStatus.Raw;
-        switch (mode)
+        return fvgs
+            .Where(fvg => fvg.Type == type && fvg.CandleIndex < index && !WasInvalidatedBefore(fvg, candles, index, tolerance))
+            .OrderByDescending(fvg => fvg.CandleIndex)
+            .FirstOrDefault();
+    }
+
+    private static bool WasInvalidatedBefore(FairValueGap fvg, IReadOnlyList<Candle> candles, int index, decimal tolerance)
+    {
+        for (var i = fvg.CandleIndex + 1; i < index; i++)
         {
-            case DetectionMode.WickBreak:
+            if (ClosesThroughFvg(candles[i], fvg, tolerance))
+            {
                 return true;
-            case DetectionMode.CloseConfirmation when leaderConfirmed:
-                status = SmtSignalStatus.Confirmed;
-                return true;
-            case DetectionMode.Both:
-                status = leaderConfirmed ? SmtSignalStatus.Confirmed : SmtSignalStatus.Raw;
-                return true;
-            default:
-                return false;
+            }
         }
+
+        return false;
+    }
+
+    private static bool WickTouches(Candle candle, FairValueGap fvg, decimal tolerance)
+    {
+        return candle.Low <= fvg.Upper + tolerance && candle.High >= fvg.Lower - tolerance;
+    }
+
+    private static bool ClosesThroughFvg(Candle candle, FairValueGap fvg, decimal tolerance)
+    {
+        return fvg.Type == FairValueGapType.Bullish
+            ? candle.Close < fvg.Lower - tolerance
+            : candle.Close > fvg.Upper + tolerance;
+    }
+
+    private static decimal CurrentFvgTouchValue(Candle candle, FairValueGap fvg)
+    {
+        return fvg.Type == FairValueGapType.Bullish
+            ? Math.Min(candle.Low, fvg.Upper)
+            : Math.Max(candle.High, fvg.Lower);
     }
 
     private static SwingPoint? LatestConfirmedSwingBefore(
@@ -295,34 +415,8 @@ public sealed class SmtDetector
         return $"{swing.Symbol}:{swing.Type}:{swing.Time:O}:{swing.Price:0.########}:{swing.CandleIndex}";
     }
 
-    private static string BuildReason(SmtSignalType type, string leaderSymbol, string failedSymbol, SmtSignalStatus status)
+    private static decimal Mid(FairValueGap fvg)
     {
-        var statusText = status == SmtSignalStatus.Confirmed ? "Confirmed" : "Raw";
-        if (type == SmtSignalType.Bearish)
-        {
-            return status == SmtSignalStatus.Confirmed
-                ? $"{statusText}: {leaderSymbol} swept above the previous swing high and closed back below it; {failedSymbol} failed to break high."
-                : $"{statusText}: {leaderSymbol} broke high by wick; {failedSymbol} failed to break high.";
-        }
-
-        return status == SmtSignalStatus.Confirmed
-            ? $"{statusText}: {leaderSymbol} swept below the previous swing low and closed back above it; {failedSymbol} failed to break low."
-            : $"{statusText}: {leaderSymbol} broke low by wick; {failedSymbol} failed to break low.";
-    }
-
-    private static string BuildCalculationSummary(
-        SmtSignalType type,
-        string leaderSymbol,
-        decimal leaderPrevious,
-        decimal leaderCurrent,
-        string failedSymbol,
-        decimal failedPrevious,
-        decimal failedCurrent,
-        decimal tolerance,
-        SmtSignalStatus status)
-    {
-        var side = type == SmtSignalType.Bearish ? "high" : "low";
-        return $"{status} {side}: {leaderSymbol} prev {leaderPrevious:0.00}, current {leaderCurrent:0.00}; " +
-            $"{failedSymbol} prev {failedPrevious:0.00}, current {failedCurrent:0.00}; tol {tolerance:0.##}";
+        return (fvg.Lower + fvg.Upper) / 2m;
     }
 }
