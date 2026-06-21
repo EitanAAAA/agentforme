@@ -12,6 +12,7 @@ public sealed class DataStatusBrushConverter : IValueConverter
         return value switch
         {
             DataConnectionStatus.Connected => new SolidColorBrush(Color.FromRgb(48, 211, 143)),
+            DataConnectionStatus.Updating => new SolidColorBrush(Color.FromRgb(87, 166, 255)),
             DataConnectionStatus.Delayed => new SolidColorBrush(Color.FromRgb(245, 183, 67)),
             DataConnectionStatus.Error => new SolidColorBrush(Color.FromRgb(242, 91, 109)),
             _ => new SolidColorBrush(Color.FromRgb(154, 166, 188))

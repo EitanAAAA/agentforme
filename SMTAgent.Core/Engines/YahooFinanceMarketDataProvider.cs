@@ -13,17 +13,17 @@ public sealed class YahooFinanceMarketDataProvider
 
     static YahooFinanceMarketDataProvider()
     {
-        HttpClient.DefaultRequestHeaders.UserAgent.ParseAdd("SMTAgent/1.0 educational analytics");
+        HttpClient.DefaultRequestHeaders.UserAgent.ParseAdd("SMTAgent/1.0 delayed analytics dashboard");
         HttpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
 
     public async Task<MarketDataSet> FetchAsync(CancellationToken cancellationToken)
     {
-        var esCandles = await FetchSymbolAsync("ES", "ES=F", cancellationToken);
-        await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken);
-        var nqCandles = await FetchSymbolAsync("NQ", "NQ=F", cancellationToken);
+        var esTask = FetchSymbolAsync("ES", "ES=F", cancellationToken);
+        var nqTask = FetchSymbolAsync("NQ", "NQ=F", cancellationToken);
+        await Task.WhenAll(esTask, nqTask);
 
-        return SyncByTimestamp(esCandles, nqCandles);
+        return SyncByTimestamp(await esTask, await nqTask);
     }
 
     private static async Task<IReadOnlyList<Candle>> FetchSymbolAsync(
@@ -47,7 +47,11 @@ public sealed class YahooFinanceMarketDataProvider
         }
 
         var result = chart.GetProperty("result")[0];
-        var timestamps = result.GetProperty("timestamp");
+        if (!result.TryGetProperty("timestamp", out var timestamps))
+        {
+            return [];
+        }
+
         var quote = result.GetProperty("indicators").GetProperty("quote")[0];
         var opens = quote.GetProperty("open");
         var highs = quote.GetProperty("high");
@@ -129,3 +133,4 @@ public sealed class YahooFinanceMarketDataProvider
             array[index].TryGetInt64(out value);
     }
 }
+

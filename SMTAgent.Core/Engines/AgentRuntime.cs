@@ -8,14 +8,13 @@ public sealed class AgentRuntime
     private readonly MockMarketDataProvider _mockMarketDataProvider = new();
     private readonly SwingDetector _swingDetector = new();
     private readonly SmtDetector _smtDetector = new();
-    private readonly HashSet<string> _emittedSignalKeys = [];
-    private readonly Dictionary<string, DateTime> _lastSignalByPair = new();
+    private readonly HashSet<string> _announcedSignalIds = [];
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _runTask;
 
     public event Action<MarketDataSnapshot>? MarketDataUpdated;
     public event Action<SmtSignal>? SignalDetected;
-    public event Action<string>? LogGenerated;
+    public event Action<IReadOnlyList<SmtSignal>>? SignalsUpdated;
     public event Action<AgentStatus>? StatusChanged;
 
     public AgentStatus Status { get; private set; } = AgentStatus.Stopped;
@@ -35,7 +34,6 @@ public sealed class AgentRuntime
 
         Stop();
         ResetState();
-
         Settings.Timeframe = "15m";
         _cancellationTokenSource = new CancellationTokenSource();
         _runTask = RunAsync(_cancellationTokenSource.Token);
@@ -90,50 +88,29 @@ public sealed class AgentRuntime
 
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        MarketDataSet data;
-        var provider = Settings.DataProvider;
-        var status = DataConnectionStatus.Connected;
-        string? statusMessage = null;
+        PublishSnapshot(Settings.DataProvider, DataConnectionStatus.Updating, "Updating delayed Yahoo 15m candles...");
 
         try
         {
-            data = provider == DataProviderMode.YahooFinance
-                ? await _yahooFinanceMarketDataProvider.FetchAsync(cancellationToken)
-                : _mockMarketDataProvider.Generate("15m");
+            var data = Settings.DataProvider == DataProviderMode.Mock
+                ? _mockMarketDataProvider.Generate("15m")
+                : await _yahooFinanceMarketDataProvider.FetchAsync(cancellationToken);
+
+            ReplaceMarketData(data);
+            DetectSwings();
+
+            var status = GetDataStatus(data);
+            var message = Settings.DataProvider == DataProviderMode.Mock
+                ? "Manual demo data. Not market data."
+                : "DELAYED DATA - live updating view";
+
+            PublishSnapshot(Settings.DataProvider, status, message);
+            DetectSignals();
         }
-        catch (Exception exception) when (provider == DataProviderMode.YahooFinance)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            data = _mockMarketDataProvider.Generate("15m");
-            provider = DataProviderMode.Mock;
-            status = DataConnectionStatus.Error;
-            statusMessage = $"Yahoo Finance unavailable. Showing mock fallback: {exception.Message}";
+            PublishSnapshot(Settings.DataProvider, DataConnectionStatus.Error, exception.Message);
         }
-
-        if (data.EsCandles.Count == 0 || data.NqCandles.Count == 0)
-        {
-            status = DataConnectionStatus.Error;
-            statusMessage ??= "No synchronized ES/NQ candles were available.";
-        }
-        else if (DateTime.Now - data.EsCandles[^1].Time > TimeSpan.FromMinutes(45))
-        {
-            status = DataConnectionStatus.Delayed;
-            statusMessage = "Latest synchronized candle is delayed.";
-        }
-
-        ReplaceMarketData(data);
-        DetectSwings();
-
-        MarketDataUpdated?.Invoke(new MarketDataSnapshot(
-            EsCandles.ToList(),
-            NqCandles.ToList(),
-            EsSwings.ToList(),
-            NqSwings.ToList(),
-            provider,
-            status,
-            DateTime.Now,
-            statusMessage));
-
-        DetectSignals();
     }
 
     private void ReplaceMarketData(MarketDataSet data)
@@ -154,28 +131,32 @@ public sealed class AgentRuntime
 
     private void DetectSignals()
     {
-        var signals = _smtDetector.Detect(EsCandles, NqCandles, EsSwings, NqSwings, Settings.DetectionMode);
+        var signals = _smtDetector.Detect(EsCandles, NqCandles, EsSwings, NqSwings, Settings);
+        SignalsUpdated?.Invoke(signals);
+
         foreach (var signal in signals)
         {
-            var key = SignalKey(signal);
-            if (_emittedSignalKeys.Contains(key))
+            if (_announcedSignalIds.Contains(signal.SignalId))
             {
                 continue;
             }
 
-            var pairKey = $"{signal.Type}:{signal.LeaderSymbol}:{signal.FailedSymbol}:{signal.DetectionMode}";
-            if (_lastSignalByPair.TryGetValue(pairKey, out var lastSignalTime) &&
-                signal.Time - lastSignalTime < Settings.AlertCooldown)
-            {
-                _emittedSignalKeys.Add(key);
-                continue;
-            }
-
-            _lastSignalByPair[pairKey] = signal.Time;
-            _emittedSignalKeys.Add(key);
+            _announcedSignalIds.Add(signal.SignalId);
             SignalDetected?.Invoke(signal);
-            LogGenerated?.Invoke(BuildSignalLog(signal));
         }
+    }
+
+    private void PublishSnapshot(DataProviderMode provider, DataConnectionStatus status, string? statusMessage)
+    {
+        MarketDataUpdated?.Invoke(new MarketDataSnapshot(
+            EsCandles.ToList(),
+            NqCandles.ToList(),
+            EsSwings.ToList(),
+            NqSwings.ToList(),
+            provider,
+            status,
+            DateTime.Now,
+            statusMessage));
     }
 
     private void ResetState()
@@ -184,8 +165,7 @@ public sealed class AgentRuntime
         NqCandles.Clear();
         EsSwings.Clear();
         NqSwings.Clear();
-        _emittedSignalKeys.Clear();
-        _lastSignalByPair.Clear();
+        _announcedSignalIds.Clear();
     }
 
     private void SetStatus(AgentStatus status)
@@ -194,16 +174,17 @@ public sealed class AgentRuntime
         StatusChanged?.Invoke(status);
     }
 
-    private static string BuildSignalLog(SmtSignal signal)
+    private static DataConnectionStatus GetDataStatus(MarketDataSet data)
     {
-        return $"{signal.Time:yyyy-MM-dd HH:mm} | {signal.Type} SMT | Leader: {signal.LeaderSymbol} | Failed: {signal.FailedSymbol} | " +
-            $"ES prev {signal.EsPreviousSwingValue:0.00}, current {signal.EsCurrentValue:0.00} | " +
-            $"NQ prev {signal.NqPreviousSwingValue:0.00}, current {signal.NqCurrentValue:0.00} | " +
-            $"Mode: {signal.DetectionMode} | Timeframe: 15m | {signal.Reason}";
+        if (data.EsCandles.Count == 0 || data.NqCandles.Count == 0)
+        {
+            return DataConnectionStatus.Error;
+        }
+
+        var latest = data.EsCandles[^1].Time;
+        return DateTime.Now - latest > TimeSpan.FromMinutes(20)
+            ? DataConnectionStatus.Delayed
+            : DataConnectionStatus.Connected;
     }
 
-    private static string SignalKey(SmtSignal signal)
-    {
-        return $"{signal.Time:O}:{signal.Type}:{signal.LeaderSymbol}:{signal.FailedSymbol}:{signal.DetectionMode}";
-    }
 }

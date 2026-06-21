@@ -12,6 +12,12 @@ public enum SmtSignalType
     Bearish
 }
 
+public enum SmtSignalStatus
+{
+    Raw,
+    Confirmed
+}
+
 public enum DetectionMode
 {
     WickBreak,
@@ -35,6 +41,7 @@ public enum DataProviderMode
 public enum DataConnectionStatus
 {
     Connected,
+    Updating,
     Delayed,
     Error
 }

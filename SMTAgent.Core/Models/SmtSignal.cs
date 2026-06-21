@@ -1,12 +1,23 @@
 namespace SMTAgent.Core.Models;
 
 public sealed record SmtSignal(
+    string SignalId,
     DateTime Time,
     SmtSignalType Type,
+    SmtSignalStatus Status,
     string LeaderSymbol,
     string FailedSymbol,
     string Reason,
+    string WorkflowState,
+    string CalculationSummary,
     DetectionMode DetectionMode,
+    string LeaderReferenceSwingId,
+    string FailedReferenceSwingId,
+    decimal LeaderPreviousSwingValue,
+    decimal LeaderCurrentValue,
+    decimal FailedPreviousSwingValue,
+    decimal FailedCurrentValue,
+    decimal Tolerance,
     decimal EsPreviousSwingValue,
     decimal EsCurrentValue,
     decimal NqPreviousSwingValue,
