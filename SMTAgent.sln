@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SMTAgent.Core", "SMTAgent.C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SMTAgent.Desktop", "SMTAgent.Desktop\SMTAgent.Desktop.csproj", "{A2F8E63F-246B-45DD-84EB-1392CB5BDBD5}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{B33CF559-0CA6-472B-8BBE-C385D593E402}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SMTAgent.Api", "src\SMTAgent.Api\SMTAgent.Api.csproj", "{F1228DFF-0EF3-46F8-883B-128F2FC69655}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +28,12 @@ Global
 		{A2F8E63F-246B-45DD-84EB-1392CB5BDBD5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A2F8E63F-246B-45DD-84EB-1392CB5BDBD5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A2F8E63F-246B-45DD-84EB-1392CB5BDBD5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F1228DFF-0EF3-46F8-883B-128F2FC69655}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F1228DFF-0EF3-46F8-883B-128F2FC69655}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F1228DFF-0EF3-46F8-883B-128F2FC69655}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F1228DFF-0EF3-46F8-883B-128F2FC69655}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{F1228DFF-0EF3-46F8-883B-128F2FC69655} = {B33CF559-0CA6-472B-8BBE-C385D593E402}
 	EndGlobalSection
 EndGlobal
