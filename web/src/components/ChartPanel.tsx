@@ -37,6 +37,14 @@ type DragAction =
   | { kind: 'resize'; id: string; handle: string }
   | null
 
+type PaletteDrag = {
+  pointerId: number
+  startX: number
+  startY: number
+  originLeft: number
+  originTop: number
+}
+
 type DataPoint = {
   x: number
   y: number
@@ -99,6 +107,7 @@ export function ChartPanel({
   focusTime,
   focusRange,
 }: Props) {
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -112,6 +121,7 @@ export function ChartPanel({
   const lastCrosshairUpdateRef = useRef(0)
   const ohlcRef = useRef('O -- H -- L -- C --')
   const dragActionRef = useRef<DragAction>(null)
+  const paletteDragRef = useRef<PaletteDrag | null>(null)
   const drawingsRef = useRef<Drawing[]>([])
   const candlesRef = useRef<CandleDto[]>([])
   const annotationsRef = useRef<ChartAnnotationDto[]>([])
@@ -120,9 +130,11 @@ export function ChartPanel({
   const [ohlc, setOhlc] = useState('O -- H -- L -- C --')
   const [overlayVersion, setOverlayVersion] = useState(0)
   const [tool, setTool] = useState<Tool>('select')
+  const [magnetEnabled, setMagnetEnabled] = useState(false)
   const [drawings, setDrawings] = useState<Drawing[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [floating, setFloating] = useState<{ left: number; top: number } | null>(null)
+  const [shortcutPosition, setShortcutPosition] = useState<{ left: number; top: number } | null>(null)
   const data = useMemo(() => toSeriesData(candles), [candles])
   const lastCandle = candles.at(-1)
   const title = symbol === 'NQ'
@@ -428,7 +440,7 @@ export function ChartPanel({
     const id = `${tool}-${Date.now()}`
     const drawing = createDrawing(id, tool, point)
     dragActionRef.current = { kind: 'draw', id }
-    setSelectedId(id)
+    setSelectedId(null)
     commitDrawings([...drawingsRef.current, drawing])
   }
 
@@ -471,6 +483,7 @@ export function ChartPanel({
     dragActionRef.current = null
     if (action?.kind === 'draw') {
       setTool('select')
+      setSelectedId(null)
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
@@ -478,18 +491,19 @@ export function ChartPanel({
   }
 
   const onSelect = (id: string, event: PointerEvent) => {
-    event.stopPropagation()
-    setSelectedId(id)
     if (tool !== 'select') {
       return
     }
 
+    event.stopPropagation()
+    setSelectedId(id)
     const drawing = drawingsRef.current.find((item) => item.id === id)
     const point = getDataPoint(event)
     if (!drawing || drawing.locked || !point) {
       return
     }
 
+    event.currentTarget.setPointerCapture?.(event.pointerId)
     dragActionRef.current = { kind: 'move', id, startTime: point.time, startPrice: point.price, original: drawing }
   }
 
@@ -500,10 +514,17 @@ export function ChartPanel({
       return
     }
 
+    event.currentTarget.setPointerCapture?.(event.pointerId)
     dragActionRef.current = { kind: 'resize', id, handle }
   }
 
   const selectedDrawing = drawings.find((drawing) => drawing.id === selectedId)
+  const chooseTool = (nextTool: Tool) => {
+    setTool(nextTool)
+    if (nextTool !== 'select') {
+      setSelectedId(null)
+    }
+  }
 
   return (
     <section className={`chart-panel ${compact ? 'compact' : ''}`}>
@@ -516,16 +537,27 @@ export function ChartPanel({
         onFit={fit}
         onLatest={latest}
       />
-      <div className="chart-shell" onDoubleClick={reset}>
+      <div ref={shellRef} className="chart-shell" onDoubleClick={reset}>
         <DrawingToolbar
           tool={tool}
+          magnetEnabled={magnetEnabled}
           selectedDrawing={selectedDrawing}
-          onTool={setTool}
+          onTool={chooseTool}
+          onToggleMagnet={() => setMagnetEnabled((value) => !value)}
           onLock={() => updateSelected((drawing) => ({ ...drawing, locked: !drawing.locked }))}
           onToggleHidden={() => updateSelected((drawing) => ({ ...drawing, hidden: !drawing.hidden }))}
           onDelete={() => deleteSelected()}
         />
-        <ShortcutPalette tool={tool} onTool={setTool} />
+        <ShortcutPalette
+          tool={tool}
+          magnetEnabled={magnetEnabled}
+          position={shortcutPosition}
+          onTool={chooseTool}
+          onToggleMagnet={() => setMagnetEnabled((value) => !value)}
+          onDragStart={startPaletteDrag}
+          onDragMove={movePalette}
+          onDragEnd={endPaletteDrag}
+        />
         <div ref={containerRef} className="chart-root" />
         <AnnotationLayer
           boxes={overlay.boxes}
@@ -584,7 +616,88 @@ export function ChartPanel({
       return null
     }
 
-    return { x, y, time: normalizeTime(time), price }
+    const point = { x, y, time: normalizeTime(time), price }
+    return magnetEnabled ? snapToCandle(point, chart, series) : point
+  }
+
+  function snapToCandle(point: DataPoint, chart: IChartApi, series: ISeriesApi<'Candlestick'>): DataPoint {
+    const snapDistance = 24
+    let best: DataPoint | null = null
+    let bestDistance = snapDistance
+
+    for (const candle of candlesRef.current) {
+      const candleTime = toTimestamp(candle.timestamp)
+      const candleX = chart.timeScale().timeToCoordinate(candleTime)
+      if (candleX === null || Math.abs(candleX - point.x) > snapDistance) {
+        continue
+      }
+
+      const prices = [candle.high, candle.low, candle.close, candle.open]
+      for (const price of prices) {
+        const candleY = series.priceToCoordinate(price)
+        if (candleY === null) {
+          continue
+        }
+
+        const distance = Math.hypot(candleX - point.x, candleY - point.y)
+        if (distance <= bestDistance) {
+          bestDistance = distance
+          best = { x: candleX, y: candleY, time: candleTime, price }
+        }
+      }
+    }
+
+    return best ?? point
+  }
+
+  function startPaletteDrag(event: PointerEvent<HTMLElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    const shell = shellRef.current
+    if (!shell) {
+      return
+    }
+
+    const rect = shell.getBoundingClientRect()
+    const origin = shortcutPosition ?? { left: rect.width / 2 - 140, top: 18 }
+    paletteDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originLeft: origin.left,
+      originTop: origin.top,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setShortcutPosition(origin)
+  }
+
+  function movePalette(event: PointerEvent<HTMLElement>) {
+    const drag = paletteDragRef.current
+    const shell = shellRef.current
+    if (!drag || drag.pointerId !== event.pointerId || !shell) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = shell.getBoundingClientRect()
+    const left = clamp(drag.originLeft + event.clientX - drag.startX, 6, Math.max(6, rect.width - 360))
+    const top = clamp(drag.originTop + event.clientY - drag.startY, 6, Math.max(6, rect.height - 58))
+    setShortcutPosition({ left, top })
+  }
+
+  function endPaletteDrag(event: PointerEvent<HTMLElement>) {
+    const drag = paletteDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return
+    }
+
+    paletteDragRef.current = null
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
   }
 
   function updateSelected(update: (drawing: Drawing) => Drawing) {
@@ -620,10 +733,40 @@ export function ChartPanel({
   }
 }
 
-function ShortcutPalette({ tool, onTool }: { tool: Tool; onTool: (tool: Tool) => void }) {
+function ShortcutPalette({
+  tool,
+  magnetEnabled,
+  position,
+  onTool,
+  onToggleMagnet,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+}: {
+  tool: Tool
+  magnetEnabled: boolean
+  position: { left: number; top: number } | null
+  onTool: (tool: Tool) => void
+  onToggleMagnet: () => void
+  onDragStart: (event: PointerEvent<HTMLElement>) => void
+  onDragMove: (event: PointerEvent<HTMLElement>) => void
+  onDragEnd: (event: PointerEvent<HTMLElement>) => void
+}) {
   return (
-    <div className="quick-tool-palette">
-      <span className="drag-dots" aria-hidden="true" />
+    <div
+      className={`quick-tool-palette ${position ? 'moved' : ''}`}
+      style={position ? { left: position.left, top: position.top } : undefined}
+    >
+      <span
+        className="drag-dots"
+        role="button"
+        aria-label="Move shortcuts"
+        tabIndex={0}
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
+      />
       <button type="button" className={tool === 'box' ? 'active' : ''} title="Rectangle/FVG box" onClick={() => onTool('box')}>
         <span className="tool-icon icon-box" />
         <span>Box</span>
@@ -640,21 +783,29 @@ function ShortcutPalette({ tool, onTool }: { tool: Tool; onTool: (tool: Tool) =>
         <span className="tool-icon icon-risk" />
         <span>SL/TP</span>
       </button>
+      <button type="button" className={magnetEnabled ? 'active magnet-active' : ''} title="Magnet snap to wick / close" onClick={onToggleMagnet}>
+        <span className="tool-icon icon-magnet" />
+        <span>Mag</span>
+      </button>
     </div>
   )
 }
 
 function DrawingToolbar({
   tool,
+  magnetEnabled,
   selectedDrawing,
   onTool,
+  onToggleMagnet,
   onLock,
   onToggleHidden,
   onDelete,
 }: {
   tool: Tool
+  magnetEnabled: boolean
   selectedDrawing?: Drawing
   onTool: (tool: Tool) => void
+  onToggleMagnet: () => void
   onLock: () => void
   onToggleHidden: () => void
   onDelete: () => void
@@ -668,7 +819,7 @@ function DrawingToolbar({
       <ToolButton active={tool === 'sltp'} label="Stop loss / take profit" text="SL" onClick={() => onTool('sltp')} />
       <ToolButton active={tool === 'text'} label="Text label" text="T" onClick={() => onTool('text')} />
       <ToolButton active={tool === 'measure'} label="Measure/ruler" text="M" onClick={() => onTool('measure')} />
-      <ToolButton label="Magnet" text="Mag" onClick={() => undefined} />
+      <ToolButton active={magnetEnabled} label="Magnet snap to wick / close" text="Mag" onClick={onToggleMagnet} />
       <ToolButton active={selectedDrawing?.locked} disabled={!selectedDrawing} label="Lock/unlock selected drawing" text="Lock" onClick={onLock} />
       <ToolButton active={selectedDrawing?.hidden} disabled={!selectedDrawing} label="Hide/show selected drawing" text="Eye" onClick={onToggleHidden} />
       <ToolButton disabled={!selectedDrawing} label="Delete selected drawing" text="Del" onClick={onDelete} />
@@ -854,7 +1005,7 @@ function projectAnnotations(
       boxes.push(toBox(drawing, x1, x2, y1, entryY ?? y2, 'trade-risk', 'Stop Loss', selectedId))
       boxes.push(toBox(drawing, x1, x2, entryY ?? y1, y2, 'trade-reward', 'Take Profit', selectedId))
       if (entryY !== null) {
-        lines.push({ id: `${drawing.id}-entry`, kind: 'entry', label: 'Entry', x1, x2, y1: entryY, y2: entryY, color: '#111827', selected: false })
+        lines.push({ id: drawing.id, kind: 'entry', label: 'Entry', x1, x2, y1: entryY, y2: entryY, color: '#111827', selected: selectedId === drawing.id })
       }
       continue
     }
@@ -1010,6 +1161,10 @@ function resizeDrawing(drawing: Drawing, handle: string, point: DataPoint): Draw
   }
 
   return { ...drawing, time1: point.time, price2: point.price }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
 }
 
 function normalizeTime(time: Time): number {

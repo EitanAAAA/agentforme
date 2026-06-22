@@ -72,6 +72,13 @@ export function AnnotationLayer({
             y={box.top}
             width={box.width}
             height={box.height}
+            className="annotation-hit-box"
+          />
+          <rect
+            x={box.left}
+            y={box.top}
+            width={box.width}
+            height={box.height}
             className={`annotation-box ${box.kind.toLowerCase()} ${box.direction.toLowerCase()} ${selectedId === box.id ? 'selected' : ''}`}
             stroke={box.color}
             strokeWidth={box.lineWidth ?? 1.4}
@@ -91,6 +98,13 @@ export function AnnotationLayer({
       ))}
       {lines.filter((line) => !line.hidden).map((line) => (
         <g key={line.id} className="manual-shape" onPointerDown={(event) => onSelect(line.id, event)}>
+          <line
+            x1={line.x1}
+            x2={line.x2}
+            y1={line.y1}
+            y2={line.y2}
+            className="annotation-hit-line"
+          />
           <line
             x1={line.x1}
             x2={line.x2}
