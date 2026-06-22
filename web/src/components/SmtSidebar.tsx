@@ -27,6 +27,7 @@ export function SmtSidebar({ events, selectedId, onSelect }: Props) {
             </div>
             <span>{event.direction} SMT</span>
             <p>{event.reason}</p>
+            {selectedId === event.id && <small>Click again to open NQ 1m focus</small>}
           </button>
         ))}
         {events.length === 0 && <p className="empty">Waiting for SMT events.</p>}

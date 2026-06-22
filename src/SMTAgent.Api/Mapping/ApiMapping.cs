@@ -32,7 +32,17 @@ public static class ApiMapping
             signal.EsCurrentValue,
             signal.NqCurrentValue,
             signal.EsPreviousSwingValue,
-            signal.NqPreviousSwingValue);
+            signal.NqPreviousSwingValue,
+            signal.EsPreviousSwingTime,
+            signal.NqPreviousSwingTime,
+            signal.EsFvgLower,
+            signal.EsFvgUpper,
+            signal.EsFvgStartTime,
+            signal.EsFvgEndTime,
+            signal.NqFvgLower,
+            signal.NqFvgUpper,
+            signal.NqFvgStartTime,
+            signal.NqFvgEndTime);
     }
 
     public static ChartAnnotationDto ToDto(this FocusedChartAnnotation annotation)

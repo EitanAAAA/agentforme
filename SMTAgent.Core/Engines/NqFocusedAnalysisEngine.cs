@@ -33,6 +33,12 @@ public sealed class NqFocusedAnalysisEngine
 
         var annotations = new List<FocusedChartAnnotation>();
         var direction = signal.Type;
+        var smtAnnotation = BuildSmtAnnotation(signal, focusStart);
+        if (smtAnnotation is not null)
+        {
+            annotations.Add(smtAnnotation);
+        }
+
         var bos = FindBos(analysisCandles, signal.Time, direction, settings.SwingStrength, tolerance);
         if (bos is not null)
         {
@@ -81,6 +87,40 @@ public sealed class NqFocusedAnalysisEngine
             windowEnd,
             annotations.OrderBy(annotation => annotation.StartTime).ThenBy(annotation => annotation.Kind).ToList(),
             BuildSummary(signal, bos, annotations));
+    }
+
+    private static FocusedChartAnnotation? BuildSmtAnnotation(SmtSignal signal, DateTime fallbackStart)
+    {
+        if (signal.SetupType == SmtSetupType.HighLow)
+        {
+            var start = signal.NqPreviousSwingTime == default ? fallbackStart : signal.NqPreviousSwingTime;
+            return new FocusedChartAnnotation(
+                FocusedAnnotationKind.Smt,
+                signal.Type,
+                start,
+                signal.Time,
+                signal.NqPreviousSwingValue,
+                signal.NqCurrentValue,
+                null,
+                "Selected SMT");
+        }
+
+        if (signal.NqFvgLower is not null &&
+            signal.NqFvgUpper is not null &&
+            signal.NqFvgStartTime is not null)
+        {
+            return new FocusedChartAnnotation(
+                FocusedAnnotationKind.Smt,
+                signal.Type,
+                signal.NqFvgStartTime.Value,
+                signal.Time,
+                signal.NqFvgUpper.Value,
+                signal.NqFvgLower.Value,
+                null,
+                "Selected SMT");
+        }
+
+        return null;
     }
 
     private static DateTime GetFocusStart(SmtSignal signal)

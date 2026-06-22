@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, createMarketConnection } from '../api'
-import { ChartPanel, type ChartCrosshairSync } from '../components/ChartPanel'
+import { ChartPanel, type ChartCrosshairSync, type ChartFocusRange } from '../components/ChartPanel'
 import { SettingsDrawer } from '../components/SettingsDrawer'
 import { SmtSidebar } from '../components/SmtSidebar'
 import { StatusBadge } from '../components/StatusBadge'
 import type {
   AppSettingsDto,
   CandleDto,
+  ChartAnnotationDto,
   DataStatusDto,
   NqOneMinuteAnalysisDto,
   SmtEventDto,
@@ -21,13 +22,91 @@ const defaultToggles = {
   slTp: true,
 }
 
+function buildSelectedSmtAnnotations(event: SmtEventDto, symbol: 'ES' | 'NQ'): ChartAnnotationDto[] {
+  const isEs = symbol === 'ES'
+  const previousSwingTimestamp = isEs ? event.esPreviousSwingTimestamp : event.nqPreviousSwingTimestamp
+  const previousSwingValue = isEs ? event.esPreviousSwingValue : event.nqPreviousSwingValue
+  const currentValue = isEs ? event.esCurrentValue : event.nqCurrentValue
+  const fvgLower = isEs ? event.esFvgLower : event.nqFvgLower
+  const fvgUpper = isEs ? event.esFvgUpper : event.nqFvgUpper
+  const fvgStart = isEs ? event.esFvgStartTimestamp : event.nqFvgStartTimestamp
+  const side = event.direction === 'Bearish' ? 'high' : 'low'
+  const role = event.leaderSymbol === symbol ? `broke ${side}` : `failed ${side}`
+
+  if (event.setupType === 'HighLow' && previousSwingTimestamp) {
+    return [{
+      kind: 'Smt',
+      direction: event.direction,
+      startTimestamp: previousSwingTimestamp,
+      endTimestamp: event.timestamp,
+      price: previousSwingValue,
+      secondaryPrice: currentValue,
+      tertiaryPrice: null,
+      label: `${symbol} ${role}`,
+      isTriggered: true,
+    }]
+  }
+
+  if ((event.setupType === 'Fvg' || event.setupType === 'InvertedFvg') &&
+    fvgStart &&
+    fvgLower !== null &&
+    fvgLower !== undefined &&
+    fvgUpper !== null &&
+    fvgUpper !== undefined) {
+    return [{
+      kind: event.setupType === 'InvertedFvg' ? 'Ifvg' : 'Fvg',
+      direction: event.direction,
+      startTimestamp: fvgStart,
+      endTimestamp: event.timestamp,
+      price: fvgUpper,
+      secondaryPrice: fvgLower,
+      tertiaryPrice: null,
+      label: `${symbol} selected SMT`,
+      isTriggered: true,
+    }]
+  }
+
+  return [{
+    kind: 'Smt',
+    direction: event.direction,
+    startTimestamp: event.timestamp,
+    endTimestamp: event.timestamp,
+    price: currentValue,
+    secondaryPrice: currentValue,
+    tertiaryPrice: null,
+    label: `${symbol} selected SMT`,
+    isTriggered: true,
+  }]
+}
+
+function buildSelectedSmtFocusRange(event: SmtEventDto): ChartFocusRange {
+  const candidates = [event.timestamp]
+  if (event.setupType === 'HighLow') {
+    if (event.esPreviousSwingTimestamp) candidates.push(event.esPreviousSwingTimestamp)
+    if (event.nqPreviousSwingTimestamp) candidates.push(event.nqPreviousSwingTimestamp)
+  } else {
+    if (event.esFvgStartTimestamp) candidates.push(event.esFvgStartTimestamp)
+    if (event.nqFvgStartTimestamp) candidates.push(event.nqFvgStartTimestamp)
+  }
+
+  const sorted = candidates
+    .map((timestamp) => new Date(timestamp))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime())
+  return {
+    start: (sorted[0] ?? new Date(event.timestamp)).toISOString(),
+    end: (sorted.at(-1) ?? new Date(event.timestamp)).toISOString(),
+  }
+}
+
 export function DashboardPage() {
   const [status, setStatus] = useState<DataStatusDto | null>(null)
   const [settings, setSettings] = useState<AppSettingsDto | null>(null)
   const [esCandles, setEsCandles] = useState<CandleDto[]>([])
   const [nqCandles, setNqCandles] = useState<CandleDto[]>([])
   const [events, setEvents] = useState<SmtEventDto[]>([])
-  const [selectedEvent, setSelectedEvent] = useState<SmtEventDto | null>(null)
+  const [highlightedEvent, setHighlightedEvent] = useState<SmtEventDto | null>(null)
+  const [focusedEvent, setFocusedEvent] = useState<SmtEventDto | null>(null)
   const [focusedAnalysis, setFocusedAnalysis] = useState<NqOneMinuteAnalysisDto | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [toggles, setToggles] = useState(defaultToggles)
@@ -124,7 +203,14 @@ export function DashboardPage() {
   )
 
   async function selectEvent(event: SmtEventDto) {
-    setSelectedEvent(event)
+    if (!focusedEvent && highlightedEvent?.id !== event.id) {
+      setHighlightedEvent(event)
+      setFocusedAnalysis(null)
+      return
+    }
+
+    setHighlightedEvent(event)
+    setFocusedEvent(event)
     setFocusedAnalysis(null)
     const analysis = await api.getFocusedAnalysis(event.id)
     setFocusedAnalysis(analysis)
@@ -136,20 +222,34 @@ export function DashboardPage() {
     setSettings(saved)
   }
 
-  if (selectedEvent) {
+  const esSelectedAnnotations = useMemo(
+    () => highlightedEvent ? buildSelectedSmtAnnotations(highlightedEvent, 'ES') : [],
+    [highlightedEvent],
+  )
+  const nqSelectedAnnotations = useMemo(
+    () => highlightedEvent ? buildSelectedSmtAnnotations(highlightedEvent, 'NQ') : [],
+    [highlightedEvent],
+  )
+  const selectedFocusTime = highlightedEvent?.timestamp ?? null
+  const selectedFocusRange = useMemo(
+    () => highlightedEvent ? buildSelectedSmtFocusRange(highlightedEvent) : null,
+    [highlightedEvent],
+  )
+
+  if (focusedEvent) {
     return (
       <div className="app-shell">
         <FocusedNqAnalysisPage
-          event={selectedEvent}
+          event={focusedEvent}
           analysis={focusedAnalysis}
           show={toggles}
           onToggle={(key) => setToggles((current) => ({ ...current, [key]: !current[key] }))}
           onBack={() => {
-            setSelectedEvent(null)
+            setFocusedEvent(null)
             setFocusedAnalysis(null)
           }}
         />
-        <SmtSidebar events={sortedEvents} selectedId={selectedEvent.id} onSelect={selectEvent} />
+        <SmtSidebar events={sortedEvents} selectedId={focusedEvent.id} onSelect={selectEvent} />
       </div>
     )
   }
@@ -179,6 +279,9 @@ export function DashboardPage() {
               symbol="NQ"
               timeframe={timeframe}
               candles={nqCandles}
+              annotations={nqSelectedAnnotations}
+              focusTime={selectedFocusTime}
+              focusRange={selectedFocusRange}
               onTimeframeChange={setTimeframe}
               syncedCrosshair={syncedCrosshair}
               onCrosshairMove={setSyncedCrosshair}
@@ -191,6 +294,9 @@ export function DashboardPage() {
               symbol="ES"
               timeframe={timeframe}
               candles={esCandles}
+              annotations={esSelectedAnnotations}
+              focusTime={selectedFocusTime}
+              focusRange={selectedFocusRange}
               onTimeframeChange={setTimeframe}
               syncedCrosshair={syncedCrosshair}
               onCrosshairMove={setSyncedCrosshair}
@@ -200,7 +306,7 @@ export function DashboardPage() {
           )}
         </div>
       </main>
-      <SmtSidebar events={sortedEvents} selectedId={null} onSelect={selectEvent} />
+      <SmtSidebar events={sortedEvents} selectedId={highlightedEvent?.id ?? null} onSelect={selectEvent} />
       <SettingsDrawer open={settingsOpen} settings={settings} onClose={() => setSettingsOpen(false)} onChange={updateSettings} />
     </div>
   )

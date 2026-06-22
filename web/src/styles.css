@@ -367,11 +367,12 @@ small {
 
 .floating-tools {
   position: absolute;
-  z-index: 8;
+  z-index: 12;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 6px 8px;
+  min-height: 40px;
+  padding: 7px 9px;
   border: 1px solid #d7dde8;
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.94);
@@ -405,11 +406,11 @@ small {
   position: absolute;
   top: 18px;
   left: 50%;
-  z-index: 6;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 39px;
+  min-height: 43px;
   padding: 6px 8px;
   border: 1px solid #d7dde8;
   border-radius: 7px;
@@ -420,12 +421,17 @@ small {
 
 .quick-tool-palette button {
   display: grid;
-  place-items: center;
-  width: 28px;
-  height: 27px;
+  grid-template-columns: 20px auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 54px;
+  height: 31px;
   border: 0;
   background: transparent;
-  padding: 0;
+  padding: 0 7px;
+  color: #111827;
+  font-size: 11px;
+  font-weight: 750;
 }
 
 .quick-tool-palette button:hover,
@@ -715,13 +721,20 @@ small {
 }
 
 .event-card.selected {
-  border-color: #2563eb;
-  background: #eef4ff;
+  border-color: #facc15;
+  background: #fff9db;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.32);
 }
 
 .event-card p {
   font-size: 12px;
   line-height: 1.35;
+}
+
+.event-card small {
+  color: #854d0e;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .empty {

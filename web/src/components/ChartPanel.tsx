@@ -50,6 +50,11 @@ export type ChartCrosshairSync = {
   price: number | null
 }
 
+export type ChartFocusRange = {
+  start: string
+  end: string
+}
+
 type Props = {
   symbol: 'ES' | 'NQ'
   timeframe: string
@@ -62,6 +67,8 @@ type Props = {
   onTimeframeChange?: (timeframe: string) => void
   syncedCrosshair?: ChartCrosshairSync | null
   onCrosshairMove?: (sync: ChartCrosshairSync) => void
+  focusTime?: string | null
+  focusRange?: ChartFocusRange | null
 }
 
 function toTimestamp(timestamp: string): UTCTimestamp {
@@ -89,6 +96,8 @@ export function ChartPanel({
   onTimeframeChange,
   syncedCrosshair,
   onCrosshairMove,
+  focusTime,
+  focusRange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -107,6 +116,7 @@ export function ChartPanel({
   const candlesRef = useRef<CandleDto[]>([])
   const annotationsRef = useRef<ChartAnnotationDto[]>([])
   const suppressCrosshairSyncRef = useRef(false)
+  const appliedFocusKeyRef = useRef<string | null>(null)
   const [ohlc, setOhlc] = useState('O -- H -- L -- C --')
   const [overlayVersion, setOverlayVersion] = useState(0)
   const [tool, setTool] = useState<Tool>('select')
@@ -316,6 +326,46 @@ export function ChartPanel({
       suppressCrosshairSyncRef.current = false
     })
   }, [syncedCrosshair, symbol])
+
+  useEffect(() => {
+    if (!focusTime && !focusRange) {
+      appliedFocusKeyRef.current = null
+      return
+    }
+
+    if (!chartRef.current || !seriesRef.current || candles.length === 0) {
+      return
+    }
+
+    const focusKey = `${focusRange?.start ?? ''}|${focusRange?.end ?? ''}|${focusTime ?? ''}`
+    if (appliedFocusKeyRef.current === focusKey) {
+      return
+    }
+
+    const targetTime = new Date(focusTime ?? focusRange?.end ?? candles.at(-1)?.timestamp ?? '').getTime()
+    const targetIndex = nearestIndexForTime(candles, targetTime)
+    const focusStartIndex = focusRange ? nearestIndexForTime(candles, new Date(focusRange.start).getTime()) : targetIndex
+    const focusEndIndex = focusRange ? nearestIndexForTime(candles, new Date(focusRange.end).getTime()) : targetIndex
+    const startIndex = Math.min(focusStartIndex, focusEndIndex)
+    const endIndex = Math.max(focusStartIndex, focusEndIndex)
+    const rangeWidth = Math.max(12, endIndex - startIndex + 1)
+    const buffer = Math.max(8, Math.ceil(rangeWidth * 0.25))
+    const from = Math.max(0, startIndex - buffer)
+    const to = Math.min(candles.length - 1, endIndex + buffer)
+    autoScrollRef.current = false
+    chartRef.current.timeScale().setVisibleLogicalRange({ from, to: to + 4 })
+    appliedFocusKeyRef.current = focusKey
+
+    const candle = candles[targetIndex]
+    if (candle) {
+      suppressCrosshairSyncRef.current = true
+      chartRef.current.setCrosshairPosition(candle.close, toTimestamp(candle.timestamp), seriesRef.current)
+      requestAnimationFrame(() => {
+        suppressCrosshairSyncRef.current = false
+      })
+    }
+    scheduleOverlay()
+  }, [candles, focusRange, focusTime, scheduleOverlay])
 
   const overlay = useMemo(() => {
     void overlayVersion
@@ -576,15 +626,19 @@ function ShortcutPalette({ tool, onTool }: { tool: Tool; onTool: (tool: Tool) =>
       <span className="drag-dots" aria-hidden="true" />
       <button type="button" className={tool === 'box' ? 'active' : ''} title="Rectangle/FVG box" onClick={() => onTool('box')}>
         <span className="tool-icon icon-box" />
+        <span>Box</span>
       </button>
       <button type="button" className={tool === 'line' ? 'active' : ''} title="Line" onClick={() => onTool('line')}>
         <span className="tool-icon icon-line" />
+        <span>Line</span>
       </button>
       <button type="button" className={tool === 'halfbox' ? 'active' : ''} title="0.5 box" onClick={() => onTool('halfbox')}>
         <span className="tool-icon icon-levels" />
+        <span>0.5</span>
       </button>
       <button type="button" className={tool === 'sltp' ? 'active' : ''} title="Stop loss / take profit" onClick={() => onTool('sltp')}>
         <span className="tool-icon icon-risk" />
+        <span>SL/TP</span>
       </button>
     </div>
   )
@@ -703,6 +757,25 @@ function projectAnnotations(
       const y = series.priceToCoordinate(annotation.secondaryPrice ?? annotation.price)
       if (y !== null) {
         lines.push({ id: `backend-${annotation.kind}-${annotation.endTimestamp}`, kind: 'bos', label: 'BOS', x1, x2, y1: y, y2: y, color: '#2563eb' })
+      }
+      continue
+    }
+
+    if (annotation.kind === 'Smt' && annotation.secondaryPrice !== null && annotation.secondaryPrice !== undefined) {
+      const y1 = series.priceToCoordinate(annotation.price)
+      const y2 = series.priceToCoordinate(annotation.secondaryPrice)
+      if (y1 !== null && y2 !== null) {
+        lines.push({
+          id: `backend-${annotation.kind}-${annotation.label}-${annotation.endTimestamp}`,
+          kind: 'smt',
+          label: annotation.label || 'SMT H/L',
+          x1,
+          x2,
+          y1,
+          y2,
+          color: annotation.direction === 'Bearish' ? '#ef4444' : '#089981',
+          lineWidth: 2.8,
+        })
       }
       continue
     }
@@ -964,6 +1037,19 @@ function nearestPriceForTime(candles: CandleDto[], time: Time): number | null {
   }
 
   return best?.close ?? null
+}
+
+function nearestIndexForTime(candles: CandleDto[], timestamp: number): number {
+  if (candles.length === 0 || Number.isNaN(timestamp)) {
+    return 0
+  }
+
+  const target = Math.floor(timestamp / 1000)
+  return candles.reduce((bestIndex, candle, candleIndex) => {
+    const currentDistance = Math.abs(toTimestamp(candle.timestamp) - target)
+    const bestDistance = Math.abs(toTimestamp(candles[bestIndex].timestamp) - target)
+    return currentDistance < bestDistance ? candleIndex : bestIndex
+  }, 0)
 }
 
 function formatAxisTime(time: Time) {

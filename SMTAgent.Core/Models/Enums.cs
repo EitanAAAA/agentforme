@@ -33,6 +33,7 @@ public enum FairValueGapType
 
 public enum FocusedAnnotationKind
 {
+    Smt,
     Bos,
     Fvg,
     Ifvg,

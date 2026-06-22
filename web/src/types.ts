@@ -75,6 +75,16 @@ export type SmtEventDto = {
   nqCurrentValue: number
   esPreviousSwingValue: number
   nqPreviousSwingValue: number
+  esPreviousSwingTimestamp: string
+  nqPreviousSwingTimestamp: string
+  esFvgLower?: number | null
+  esFvgUpper?: number | null
+  esFvgStartTimestamp?: string | null
+  esFvgEndTimestamp?: string | null
+  nqFvgLower?: number | null
+  nqFvgUpper?: number | null
+  nqFvgStartTimestamp?: string | null
+  nqFvgEndTimestamp?: string | null
 }
 
 export type NqOneMinuteAnalysisDto = {

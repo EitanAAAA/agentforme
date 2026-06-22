@@ -83,7 +83,17 @@ public sealed record SmtEventDto(
     decimal EsCurrentValue,
     decimal NqCurrentValue,
     decimal EsPreviousSwingValue,
-    decimal NqPreviousSwingValue);
+    decimal NqPreviousSwingValue,
+    DateTime EsPreviousSwingTimestamp,
+    DateTime NqPreviousSwingTimestamp,
+    decimal? EsFvgLower,
+    decimal? EsFvgUpper,
+    DateTime? EsFvgStartTimestamp,
+    DateTime? EsFvgEndTimestamp,
+    decimal? NqFvgLower,
+    decimal? NqFvgUpper,
+    DateTime? NqFvgStartTimestamp,
+    DateTime? NqFvgEndTimestamp);
 
 public sealed record NqOneMinuteAnalysisDto(
     string SmtEventId,
