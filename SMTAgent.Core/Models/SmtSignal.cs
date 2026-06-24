@@ -23,6 +23,8 @@ public sealed record SmtSignal(
     decimal EsCurrentValue,
     decimal NqPreviousSwingValue,
     decimal NqCurrentValue,
+    DateTime EsCurrentTime,
+    DateTime NqCurrentTime,
     DateTime EsPreviousSwingTime,
     DateTime NqPreviousSwingTime,
     decimal? EsFvgLower,

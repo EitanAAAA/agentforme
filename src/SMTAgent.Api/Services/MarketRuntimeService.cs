@@ -170,9 +170,26 @@ public sealed class MarketRuntimeService : IHostedService
 
     private void OnSignalsUpdated(IReadOnlyList<SmtSignal> signals)
     {
+        List<SmtEventCanceledDto> canceledEvents;
+        List<SmtEventDto> eventDtos;
         lock (_gate)
         {
+            var nextIds = signals.Select(signal => signal.SignalId).ToHashSet(StringComparer.Ordinal);
+            canceledEvents = _smtEvents
+                .Where(signal => !nextIds.Contains(signal.SignalId))
+                .Select(signal => new SmtEventCanceledDto(signal.SignalId, BuildCanceledMessage(signal)))
+                .ToList();
             _smtEvents = signals.ToList();
+            eventDtos = _smtEvents
+                .OrderByDescending(signal => signal.Time)
+                .Select(signal => signal.ToDto())
+                .ToList();
+        }
+
+        _ = BroadcastAsync("SmtEventsUpdated", eventDtos);
+        foreach (var canceled in canceledEvents)
+        {
+            _ = BroadcastAsync("SmtEventCanceled", canceled);
         }
     }
 
@@ -196,6 +213,12 @@ public sealed class MarketRuntimeService : IHostedService
         return _runtime.Settings.DataProvider == DataProviderMode.Mock
             ? $"Manual demo data - {_runtime.Settings.Timeframe}. Not market data."
             : $"DELAYED DATA - live updating {_runtime.Settings.Timeframe} view";
+    }
+
+    private static string BuildCanceledMessage(SmtSignal signal)
+    {
+        var side = signal.Type == SmtSignalType.Bearish ? "high" : "low";
+        return $"SMT canceled: {signal.FailedSymbol} reached {side}";
     }
 
     private async Task BroadcastAsync(string eventName, object payload)

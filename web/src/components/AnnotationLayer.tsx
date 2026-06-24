@@ -34,9 +34,22 @@ export type OverlayLine = {
   hidden?: boolean
 }
 
+export type OverlayPoint = {
+  id: string
+  kind: string
+  label: string
+  x: number
+  y: number
+  color?: string
+  labelPlacement?: 'above' | 'below'
+  selected?: boolean
+  hidden?: boolean
+}
+
 type Props = {
   boxes: OverlayBox[]
   lines: OverlayLine[]
+  points: OverlayPoint[]
   mode: 'select' | 'draw'
   selectedId?: string | null
   onPointerDown: (event: PointerEvent<SVGSVGElement>) => void
@@ -49,6 +62,7 @@ type Props = {
 export function AnnotationLayer({
   boxes,
   lines,
+  points,
   mode,
   selectedId,
   onPointerDown,
@@ -122,6 +136,27 @@ export function AnnotationLayer({
               <circle cx={line.x1} cy={line.y1} r={5} className="handle" onPointerDown={(event) => onHandle(line.id, 'start', event)} />
               <circle cx={line.x2} cy={line.y2} r={5} className="handle" onPointerDown={(event) => onHandle(line.id, 'end', event)} />
             </>
+          )}
+        </g>
+      ))}
+      {points.filter((point) => !point.hidden).map((point) => (
+        <g key={point.id} className={`annotation-point ${point.labelPlacement ?? 'above'}`}>
+          <circle
+            cx={point.x}
+            cy={point.y}
+            r={8}
+            className={`smt-extreme-dot ${point.kind.toLowerCase()} ${selectedId === point.id ? 'selected' : ''}`}
+            fill={point.color ?? '#2563eb'}
+          />
+          <circle cx={point.x} cy={point.y} r={3.2} className="smt-extreme-core" />
+          {point.label && (
+            <text
+              x={point.x + 15}
+              y={point.y + (point.labelPlacement === 'below' ? 18 : -12)}
+              className="point-label"
+            >
+              {point.label}
+            </text>
           )}
         </g>
       ))}

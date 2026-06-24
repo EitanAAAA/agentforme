@@ -31,6 +31,8 @@ public static class ApiMapping
             signal.DetectionMode.ToString(),
             signal.EsCurrentValue,
             signal.NqCurrentValue,
+            signal.EsCurrentTime,
+            signal.NqCurrentTime,
             signal.EsPreviousSwingValue,
             signal.NqPreviousSwingValue,
             signal.EsPreviousSwingTime,

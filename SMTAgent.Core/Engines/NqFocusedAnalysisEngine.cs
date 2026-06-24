@@ -8,6 +8,7 @@ public sealed class NqFocusedAnalysisEngine
     private static readonly TimeSpan StructureLookback = TimeSpan.FromMinutes(22);
     private static readonly TimeSpan MaxPostSmtFocus = TimeSpan.FromMinutes(70);
     private static readonly TimeSpan StoryBuffer = TimeSpan.FromMinutes(8);
+    private const decimal DefaultRiskStopPoints = 20m;
     private readonly SwingDetector _swingDetector = new();
 
     public FocusedAnalysisResult Analyze(IReadOnlyList<Candle> nqCandles, SmtSignal signal, AgentSettings settings)
@@ -37,6 +38,12 @@ public sealed class NqFocusedAnalysisEngine
         if (smtAnnotation is not null)
         {
             annotations.Add(smtAnnotation);
+        }
+
+        var smtExtreme = BuildSmtExtremeAnnotation(analysisCandles, signal, direction);
+        if (smtExtreme is not null)
+        {
+            annotations.Add(smtExtreme);
         }
 
         var bos = FindBos(analysisCandles, signal.Time, direction, settings.SwingStrength, tolerance);
@@ -121,6 +128,41 @@ public sealed class NqFocusedAnalysisEngine
         }
 
         return null;
+    }
+
+    private static FocusedChartAnnotation? BuildSmtExtremeAnnotation(
+        IReadOnlyList<Candle> candles,
+        SmtSignal signal,
+        SmtSignalType direction)
+    {
+        if (signal.SetupType != SmtSetupType.HighLow)
+        {
+            return null;
+        }
+
+        var postSmt = candles
+            .Where(candle => candle.Time >= signal.Time)
+            .OrderBy(candle => candle.Time)
+            .ToList();
+        if (postSmt.Count == 0)
+        {
+            return null;
+        }
+
+        var extreme = direction == SmtSignalType.Bearish
+            ? postSmt.OrderByDescending(candle => candle.High).ThenBy(candle => candle.Time).First()
+            : postSmt.OrderBy(candle => candle.Low).ThenBy(candle => candle.Time).First();
+        var price = direction == SmtSignalType.Bearish ? extreme.High : extreme.Low;
+
+        return new FocusedChartAnnotation(
+            FocusedAnnotationKind.SmtExtreme,
+            direction,
+            extreme.Time,
+            extreme.Time,
+            price,
+            null,
+            null,
+            "SMT point");
     }
 
     private static DateTime GetFocusStart(SmtSignal signal)
@@ -294,7 +336,9 @@ public sealed class NqFocusedAnalysisEngine
             return null;
         }
 
-        var stop = halfBox.Price;
+        var stop = direction == SmtSignalType.Bearish
+            ? entry + DefaultRiskStopPoints
+            : entry - DefaultRiskStopPoints;
         var target = halfBox.TertiaryPrice ?? (direction == SmtSignalType.Bearish ? entry - 200m : entry + 200m);
         return new FocusedChartAnnotation(
             FocusedAnnotationKind.StopTakeProfit,

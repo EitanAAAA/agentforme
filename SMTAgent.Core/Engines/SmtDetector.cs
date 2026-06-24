@@ -12,24 +12,33 @@ public sealed class SmtDetector
         AgentSettings settings)
     {
         var signalsById = new Dictionary<string, SmtSignal>();
-        var count = Math.Min(esCandles.Count, nqCandles.Count);
         var tolerance = settings.TickTolerance * settings.TickSize;
         var esFvgs = DetectFvgs(esCandles);
         var nqFvgs = DetectFvgs(nqCandles);
+        var esIndexByTime = BuildIndexByTime(esCandles);
+        var nqIndexByTime = BuildIndexByTime(nqCandles);
+        var usedHighLowReferences = new HashSet<string>();
+        var synchronizedTimes = esIndexByTime.Keys
+            .Intersect(nqIndexByTime.Keys)
+            .OrderBy(time => time);
 
-        for (var index = 0; index < count; index++)
+        foreach (var time in synchronizedTimes)
         {
-            if (esCandles[index].Time != nqCandles[index].Time)
-            {
-                continue;
-            }
-
-            DetectHighLow(signalsById, esCandles, nqCandles, esSwings, nqSwings, index, tolerance, settings);
-            DetectFvgTap(signalsById, esCandles, nqCandles, esFvgs, nqFvgs, index, tolerance);
-            DetectInvertedFvg(signalsById, esCandles, nqCandles, esFvgs, nqFvgs, index, tolerance);
+            var esIndex = esIndexByTime[time];
+            var nqIndex = nqIndexByTime[time];
+            DetectHighLow(signalsById, usedHighLowReferences, esCandles, nqCandles, esSwings, nqSwings, esIndex, nqIndex, tolerance, settings);
+            DetectFvgTap(signalsById, esCandles, nqCandles, esFvgs, nqFvgs, esIndex, nqIndex, tolerance);
+            DetectInvertedFvg(signalsById, esCandles, nqCandles, esFvgs, nqFvgs, esIndex, nqIndex, tolerance);
         }
 
-        return signalsById.Values
+        var highLowSignals = signalsById.Values
+            .Select(signal => signal.SetupType == SmtSetupType.HighLow
+                ? UpdateActiveHighLowSignal(signal, esCandles, nqCandles, tolerance)
+                : signal)
+            .Where(signal => signal is not null)
+            .Cast<SmtSignal>();
+
+        return highLowSignals
             .OrderBy(signal => signal.Time)
             .ThenBy(signal => signal.SetupType)
             .ThenBy(signal => signal.Type)
@@ -39,29 +48,38 @@ public sealed class SmtDetector
 
     private static void DetectHighLow(
         IDictionary<string, SmtSignal> signalsById,
+        ISet<string> usedHighLowReferences,
         IReadOnlyList<Candle> esCandles,
         IReadOnlyList<Candle> nqCandles,
         IReadOnlyList<SwingPoint> esSwings,
         IReadOnlyList<SwingPoint> nqSwings,
-        int index,
+        int esIndex,
+        int nqIndex,
         decimal tolerance,
         AgentSettings settings)
     {
-        var es = esCandles[index];
-        var nq = nqCandles[index];
+        var es = esCandles[esIndex];
+        var nq = nqCandles[nqIndex];
+        if (es.Time != nq.Time)
+        {
+            return;
+        }
 
-        var esHigh = LatestConfirmedSwingBefore(esSwings, SwingPointType.High, index, settings.SwingStrength, settings.SwingLookbackCandles);
-        var nqHigh = LatestConfirmedSwingBefore(nqSwings, SwingPointType.High, index, settings.SwingStrength, settings.SwingLookbackCandles);
-        if (esHigh is not null && nqHigh is not null)
+        var esHigh = LatestConfirmedSwingBefore(esSwings, SwingPointType.High, esIndex, settings.SwingStrength, settings.SwingLookbackCandles);
+        var nqHigh = LatestConfirmedSwingBefore(nqSwings, SwingPointType.High, nqIndex, settings.SwingStrength, settings.SwingLookbackCandles);
+        if (settings.ShowBearishSmt && esHigh is not null && nqHigh is not null && SameReferenceTime(esHigh, nqHigh))
         {
             var esBreak = es.High > esHigh.Price + tolerance;
             var nqBreak = nq.High > nqHigh.Price + tolerance;
-            if (esBreak ^ nqBreak)
+            var esHeldLowerHigh = es.High < esHigh.Price - tolerance;
+            var nqHeldLowerHigh = nq.High < nqHigh.Price - tolerance;
+            if ((esBreak && nqHeldLowerHigh) || (nqBreak && esHeldLowerHigh))
             {
                 var leader = esBreak ? es : nq;
                 var failed = esBreak ? nq : es;
                 AddHighLowSignal(
                     signalsById,
+                    usedHighLowReferences,
                     SmtSignalType.Bearish,
                     leader,
                     failed,
@@ -69,22 +87,26 @@ public sealed class SmtDetector
                     nqHigh,
                     es.High,
                     nq.High,
-                    tolerance);
+                    tolerance,
+                    settings.DetectionMode);
             }
         }
 
-        var esLow = LatestConfirmedSwingBefore(esSwings, SwingPointType.Low, index, settings.SwingStrength, settings.SwingLookbackCandles);
-        var nqLow = LatestConfirmedSwingBefore(nqSwings, SwingPointType.Low, index, settings.SwingStrength, settings.SwingLookbackCandles);
-        if (esLow is not null && nqLow is not null)
+        var esLow = LatestConfirmedSwingBefore(esSwings, SwingPointType.Low, esIndex, settings.SwingStrength, settings.SwingLookbackCandles);
+        var nqLow = LatestConfirmedSwingBefore(nqSwings, SwingPointType.Low, nqIndex, settings.SwingStrength, settings.SwingLookbackCandles);
+        if (settings.ShowBullishSmt && esLow is not null && nqLow is not null && SameReferenceTime(esLow, nqLow))
         {
             var esBreak = es.Low < esLow.Price - tolerance;
             var nqBreak = nq.Low < nqLow.Price - tolerance;
-            if (esBreak ^ nqBreak)
+            var esHeldHigherLow = es.Low > esLow.Price + tolerance;
+            var nqHeldHigherLow = nq.Low > nqLow.Price + tolerance;
+            if ((esBreak && nqHeldHigherLow) || (nqBreak && esHeldHigherLow))
             {
                 var leader = esBreak ? es : nq;
                 var failed = esBreak ? nq : es;
                 AddHighLowSignal(
                     signalsById,
+                    usedHighLowReferences,
                     SmtSignalType.Bullish,
                     leader,
                     failed,
@@ -92,7 +114,8 @@ public sealed class SmtDetector
                     nqLow,
                     es.Low,
                     nq.Low,
-                    tolerance);
+                    tolerance,
+                    settings.DetectionMode);
             }
         }
     }
@@ -103,20 +126,21 @@ public sealed class SmtDetector
         IReadOnlyList<Candle> nqCandles,
         IReadOnlyList<FairValueGap> esFvgs,
         IReadOnlyList<FairValueGap> nqFvgs,
-        int index,
+        int esIndex,
+        int nqIndex,
         decimal tolerance)
     {
         foreach (var fvgType in new[] { FairValueGapType.Bullish, FairValueGapType.Bearish })
         {
-            var esFvg = LatestActiveFvgBefore(esFvgs, esCandles, fvgType, index, tolerance);
-            var nqFvg = LatestActiveFvgBefore(nqFvgs, nqCandles, fvgType, index, tolerance);
+            var esFvg = LatestActiveFvgBefore(esFvgs, esCandles, fvgType, esIndex, tolerance);
+            var nqFvg = LatestActiveFvgBefore(nqFvgs, nqCandles, fvgType, nqIndex, tolerance);
             if (esFvg is null || nqFvg is null)
             {
                 continue;
             }
 
-            var es = esCandles[index];
-            var nq = nqCandles[index];
+            var es = esCandles[esIndex];
+            var nq = nqCandles[nqIndex];
             var esTapped = WickTouches(es, esFvg, tolerance);
             var nqTapped = WickTouches(nq, nqFvg, tolerance);
             if (!(esTapped ^ nqTapped))
@@ -148,20 +172,21 @@ public sealed class SmtDetector
         IReadOnlyList<Candle> nqCandles,
         IReadOnlyList<FairValueGap> esFvgs,
         IReadOnlyList<FairValueGap> nqFvgs,
-        int index,
+        int esIndex,
+        int nqIndex,
         decimal tolerance)
     {
         foreach (var fvgType in new[] { FairValueGapType.Bullish, FairValueGapType.Bearish })
         {
-            var esFvg = LatestActiveFvgBefore(esFvgs, esCandles, fvgType, index, tolerance);
-            var nqFvg = LatestActiveFvgBefore(nqFvgs, nqCandles, fvgType, index, tolerance);
+            var esFvg = LatestActiveFvgBefore(esFvgs, esCandles, fvgType, esIndex, tolerance);
+            var nqFvg = LatestActiveFvgBefore(nqFvgs, nqCandles, fvgType, nqIndex, tolerance);
             if (esFvg is null || nqFvg is null)
             {
                 continue;
             }
 
-            var es = esCandles[index];
-            var nq = nqCandles[index];
+            var es = esCandles[esIndex];
+            var nq = nqCandles[nqIndex];
             var esInverted = ClosesThroughFvg(es, esFvg, tolerance);
             var nqInverted = ClosesThroughFvg(nq, nqFvg, tolerance);
             if (!(esInverted ^ nqInverted))
@@ -225,6 +250,7 @@ public sealed class SmtDetector
 
     private static void AddHighLowSignal(
         IDictionary<string, SmtSignal> signalsById,
+        ISet<string> usedHighLowReferences,
         SmtSignalType type,
         Candle leader,
         Candle failed,
@@ -232,12 +258,23 @@ public sealed class SmtDetector
         SwingPoint nqSwing,
         decimal esCurrentValue,
         decimal nqCurrentValue,
-        decimal tolerance)
+        decimal tolerance,
+        DetectionMode detectionMode)
     {
+        if (leader.Time != failed.Time)
+        {
+            return;
+        }
+
+        if (!SameReferenceTime(esSwing, nqSwing))
+        {
+            return;
+        }
+
         var leaderSwing = leader.Symbol == "ES" ? esSwing : nqSwing;
         var failedSwing = failed.Symbol == "ES" ? esSwing : nqSwing;
-        var signalId = $"HL:{type}:{leader.Symbol}:{SwingId(leaderSwing)}:{SwingId(failedSwing)}";
-        if (signalsById.ContainsKey(signalId))
+        var referenceKey = $"HL:{type}:{leader.Symbol}:{failed.Symbol}:{SwingId(leaderSwing)}:{SwingId(failedSwing)}";
+        if (usedHighLowReferences.Contains(referenceKey))
         {
             return;
         }
@@ -247,19 +284,43 @@ public sealed class SmtDetector
         var leaderCurrent = leader.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
         var failedCurrent = failed.Symbol == "ES" ? esCurrentValue : nqCurrentValue;
         var side = type == SmtSignalType.Bearish ? "high" : "low";
+        var closeConfirmed = type == SmtSignalType.Bullish
+            ? leader.Low < leaderPrevious - tolerance && leader.Close > leaderPrevious + tolerance
+            : leader.High > leaderPrevious + tolerance && leader.Close < leaderPrevious - tolerance;
+        var status = detectionMode switch
+        {
+            DetectionMode.CloseConfirmation when closeConfirmed => SmtSignalStatus.Confirmed,
+            DetectionMode.Both when closeConfirmed => SmtSignalStatus.Confirmed,
+            DetectionMode.Both => SmtSignalStatus.Raw,
+            DetectionMode.WickBreak => SmtSignalStatus.Confirmed,
+            _ => SmtSignalStatus.Raw
+        };
+        if (detectionMode == DetectionMode.CloseConfirmation && !closeConfirmed)
+        {
+            return;
+        }
+
+        var signalId = $"{referenceKey}:{leader.Time:O}";
+        if (signalsById.TryGetValue(signalId, out var existing) && existing.Status == SmtSignalStatus.Confirmed)
+        {
+            return;
+        }
+        usedHighLowReferences.Add(referenceKey);
 
         signalsById[signalId] = new SmtSignal(
             signalId,
             leader.Time,
             SmtSetupType.HighLow,
             type,
-            SmtSignalStatus.Confirmed,
+            status,
             leader.Symbol,
             failed.Symbol,
-            $"SMT H/L: {leader.Symbol} broke {side}, {failed.Symbol} failed",
-            "SMT H/L",
+            type == SmtSignalType.Bullish
+                ? $"{leader.Symbol} broke low, {failed.Symbol} held higher low"
+                : $"{leader.Symbol} broke high, {failed.Symbol} held lower high",
+            type == SmtSignalType.Bullish ? "Bullish SMT" : "Bearish SMT",
             $"{leader.Symbol} {leaderPrevious:0.00}->{leaderCurrent:0.00}; {failed.Symbol} {failedPrevious:0.00}->{failedCurrent:0.00}",
-            DetectionMode.WickBreak,
+            detectionMode == DetectionMode.Both && status == SmtSignalStatus.Raw ? DetectionMode.WickBreak : detectionMode,
             SwingId(leaderSwing),
             SwingId(failedSwing),
             leaderPrevious,
@@ -271,6 +332,8 @@ public sealed class SmtDetector
             esCurrentValue,
             nqSwing.Price,
             nqCurrentValue,
+            leader.Symbol == "ES" ? leader.Time : failed.Time,
+            leader.Symbol == "NQ" ? leader.Time : failed.Time,
             esSwing.Time,
             nqSwing.Time,
             null,
@@ -296,6 +359,11 @@ public sealed class SmtDetector
         string label,
         decimal tolerance)
     {
+        if (leader.Time != failed.Time)
+        {
+            return;
+        }
+
         var leaderFvg = leader.Symbol == "ES" ? esFvg : nqFvg;
         var failedFvg = failed.Symbol == "ES" ? esFvg : nqFvg;
         var prefix = setupType == SmtSetupType.Fvg ? "FVG" : "IFVG";
@@ -336,6 +404,8 @@ public sealed class SmtDetector
             esCurrentValue,
             nqMid,
             nqCurrentValue,
+            CurrentTimeForSymbol(leader, failed, "ES"),
+            CurrentTimeForSymbol(leader, failed, "NQ"),
             esFvg.EndTime,
             nqFvg.EndTime,
             esFvg.Lower,
@@ -410,9 +480,101 @@ public sealed class SmtDetector
             .FirstOrDefault();
     }
 
+    private static Dictionary<DateTime, int> BuildIndexByTime(IReadOnlyList<Candle> candles)
+    {
+        var indexByTime = new Dictionary<DateTime, int>();
+        for (var index = 0; index < candles.Count; index++)
+        {
+            indexByTime[candles[index].Time] = index;
+        }
+
+        return indexByTime;
+    }
+
+    private static SmtSignal? UpdateActiveHighLowSignal(
+        SmtSignal signal,
+        IReadOnlyList<Candle> esCandles,
+        IReadOnlyList<Candle> nqCandles,
+        decimal tolerance)
+    {
+        var leaderCandles = signal.LeaderSymbol == "ES" ? esCandles : nqCandles;
+        var failedIndexByTime = BuildIndexByTime(signal.FailedSymbol == "ES" ? esCandles : nqCandles);
+        var bestTime = signal.LeaderSymbol == "ES" ? signal.EsCurrentTime : signal.NqCurrentTime;
+        var bestLeaderValue = signal.LeaderCurrentValue;
+        var bestFailedValue = signal.FailedCurrentValue;
+
+        foreach (var leader in leaderCandles.Where(candle => candle.Time >= signal.Time).OrderBy(candle => candle.Time))
+        {
+            if (!failedIndexByTime.TryGetValue(leader.Time, out var failedIndex))
+            {
+                continue;
+            }
+
+            var failed = (signal.FailedSymbol == "ES" ? esCandles : nqCandles)[failedIndex];
+            if (FailedSideInvalidated(signal.Type, failed, signal.FailedPreviousSwingValue, tolerance))
+            {
+                return null;
+            }
+
+            var leaderValue = ExtremeValue(leader, signal.Type);
+            if (!IsMoreExtreme(signal.Type, leaderValue, bestLeaderValue))
+            {
+                continue;
+            }
+
+            bestTime = leader.Time;
+            bestLeaderValue = leaderValue;
+            bestFailedValue = ExtremeValue(failed, signal.Type);
+        }
+
+        var esCurrentValue = signal.LeaderSymbol == "ES" ? bestLeaderValue : bestFailedValue;
+        var nqCurrentValue = signal.LeaderSymbol == "NQ" ? bestLeaderValue : bestFailedValue;
+        return signal with
+        {
+            LeaderCurrentValue = bestLeaderValue,
+            FailedCurrentValue = bestFailedValue,
+            EsCurrentValue = esCurrentValue,
+            NqCurrentValue = nqCurrentValue,
+            EsCurrentTime = bestTime,
+            NqCurrentTime = bestTime,
+            CalculationSummary = $"{signal.LeaderSymbol} {signal.LeaderPreviousSwingValue:0.00}->{bestLeaderValue:0.00}; {signal.FailedSymbol} {signal.FailedPreviousSwingValue:0.00}->{bestFailedValue:0.00}",
+            Reason = signal.Type == SmtSignalType.Bullish
+                ? $"{signal.LeaderSymbol} broke low, {signal.FailedSymbol} held higher low"
+                : $"{signal.LeaderSymbol} broke high, {signal.FailedSymbol} held lower high",
+            WorkflowState = signal.Type == SmtSignalType.Bullish ? "Bullish SMT" : "Bearish SMT"
+        };
+    }
+
+    private static bool FailedSideInvalidated(SmtSignalType type, Candle failed, decimal failedReference, decimal tolerance)
+    {
+        return type == SmtSignalType.Bullish
+            ? failed.Low < failedReference - tolerance
+            : failed.High > failedReference + tolerance;
+    }
+
+    private static decimal ExtremeValue(Candle candle, SmtSignalType type)
+    {
+        return type == SmtSignalType.Bullish ? candle.Low : candle.High;
+    }
+
+    private static bool IsMoreExtreme(SmtSignalType type, decimal candidate, decimal current)
+    {
+        return type == SmtSignalType.Bullish ? candidate < current : candidate > current;
+    }
+
+    private static DateTime CurrentTimeForSymbol(Candle leader, Candle failed, string symbol)
+    {
+        return leader.Symbol == symbol ? leader.Time : failed.Time;
+    }
+
     private static string SwingId(SwingPoint swing)
     {
         return $"{swing.Symbol}:{swing.Type}:{swing.Time:O}:{swing.Price:0.########}:{swing.CandleIndex}";
+    }
+
+    private static bool SameReferenceTime(SwingPoint esSwing, SwingPoint nqSwing)
+    {
+        return esSwing.Time == nqSwing.Time;
     }
 
     private static decimal Mid(FairValueGap fvg)
