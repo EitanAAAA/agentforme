@@ -275,10 +275,10 @@ function buildReplayNarration(
     Smt: `SMT context is active from ${latestTime}.`,
     SmtExtreme: `SMT extreme printed at ${latestTime}.`,
     Bos: `BOS confirmed at ${latestTime}.`,
-    Fvg: `FVG formed at ${latestTime}.`,
-    Ifvg: `IFVG confirmed at ${latestTime}.`,
-    HalfBox: `0.5 box is available at ${latestTime}.`,
-    StopTakeProfit: `Entry plan active at ${latestTime}: fixed 20-point stop, target from strategy.`,
+    Fvg: `Original imbalance marked at ${latestTime}.`,
+    Ifvg: `IFVG confirmed at ${latestTime}; the original imbalance failed.`,
+    HalfBox: `0.5 box is available after BOS + IFVG at ${latestTime}.`,
+    StopTakeProfit: `Visual entry plan active at ${latestTime}: stop beyond SMT invalidation with the configured buffer.`,
   }
 
   return {
@@ -301,12 +301,63 @@ function buildReplayLog(
   const visible = annotations
     .filter((annotation) => new Date(annotation.endTimestamp).getTime() <= cutoff)
     .sort((a, b) => new Date(a.endTimestamp).getTime() - new Date(b.endTimestamp).getTime())
+  const direction = annotations.find((annotation) => annotation.direction === 'Bearish' || annotation.direction === 'Bullish')?.direction ?? 'Bearish'
+  const isBearish = direction === 'Bearish'
+  const hasSmt = visible.some((annotation) => annotation.kind === 'Smt' || annotation.kind === 'SmtExtreme')
+  const bos = visible.find((annotation) => annotation.kind === 'Bos')
+  const fvg = visible.find((annotation) => annotation.kind === 'Fvg')
+  const ifvg = visible.find((annotation) => annotation.kind === 'Ifvg')
+  const halfBox = visible.find((annotation) => annotation.kind === 'HalfBox')
   const items = [{
     id: `candle-${candle.timestamp}`,
     title: `Candle ${time}`,
     detail: `O ${candle.open.toFixed(2)} H ${candle.high.toFixed(2)} L ${candle.low.toFixed(2)} C ${candle.close.toFixed(2)}`,
     tone: 'info',
   }]
+
+  if (hasSmt && !bos) {
+    items.push({
+      id: `bos-watch-${time}`,
+      title: 'Searching BOS',
+      detail: isBearish
+        ? 'Bearish SMT active. Watching the last confirmed pre-SMT swing low; a wick break below it confirms BOS.'
+        : 'Bullish SMT active. Watching the last confirmed pre-SMT swing high; a wick break above it confirms BOS.',
+      tone: 'action',
+    })
+  }
+
+  if (bos && !fvg) {
+    items.push({
+      id: `fvg-watch-${time}`,
+      title: 'Searching FVG',
+      detail: isBearish
+        ? 'BOS printed. Looking back into the push up for the bullish FVG that can fail into bearish IFVG.'
+        : 'BOS printed. Looking back into the push down for the bearish FVG that can fail into bullish IFVG.',
+      tone: 'action',
+    })
+  }
+
+  if (fvg && !ifvg) {
+    items.push({
+      id: `ifvg-watch-${time}`,
+      title: 'Searching IFVG',
+      detail: isBearish
+        ? 'Bullish FVG located. Waiting for a bearish candle to close through the gap.'
+        : 'Bearish FVG located. Waiting for a bullish candle to close through the gap.',
+      tone: 'action',
+    })
+  }
+
+  if (ifvg && !halfBox) {
+    items.push({
+      id: `box-watch-${time}`,
+      title: 'Building 0.5 Box',
+      detail: isBearish
+        ? 'IFVG confirmed. Measuring from SMT high to the lowest wick of the displacement.'
+        : 'IFVG confirmed. Measuring from SMT low to the highest wick of the displacement.',
+      tone: 'success',
+    })
+  }
 
   for (const annotation of visible.slice(-6)) {
     const annotationTime = new Date(annotation.endTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -327,7 +378,7 @@ function buildReplayLog(
     })
   }
 
-  return items.slice(-7)
+  return items.slice(-9)
 }
 
 function replayLogTitle(kind: string) {
@@ -348,10 +399,10 @@ function replayLogDetail(kind: string, label: string, time: string) {
     Smt: `SMT is active at ${time}; wait for structure, do not use future candles.`,
     SmtExtreme: `SMT extreme is marked at ${time}.`,
     Bos: `Break of structure confirmed at ${time}.`,
-    Fvg: `Fair value gap formed at ${time}.`,
-    Ifvg: `Inverted FVG confirmed at ${time}.`,
-    HalfBox: `0.5 box is available at ${time}.`,
-    StopTakeProfit: `Entry/SL/TP plan becomes available at ${time}. Stop is fixed 20 points; target is strategy-calculated.`,
+    Fvg: `Original fair value gap from the move into SMT is marked at ${time}.`,
+    Ifvg: `Inverted FVG confirmed at ${time}; imbalance flipped in the setup direction.`,
+    HalfBox: `0.5 box is available at ${time} after BOS + IFVG.`,
+    StopTakeProfit: `Visual entry/SL/TP plan becomes available at ${time}. Stop uses the configured buffer beyond SMT invalidation; no trades are executed.`,
   }
   return details[kind] ?? `${label} at ${time}.`
 }

@@ -117,6 +117,7 @@ export type AppSettingsDto = {
   alertCooldownCandles: number
   tickTolerance: number
   tickSize: number
+  riskBufferPoints: number
   showBullishSmt: boolean
   showBearishSmt: boolean
   dataProvider: string

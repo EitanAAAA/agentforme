@@ -123,6 +123,7 @@ public sealed record AppSettingsDto(
     int AlertCooldownCandles,
     int TickTolerance,
     decimal TickSize,
+    decimal RiskBufferPoints,
     bool ShowBullishSmt,
     bool ShowBearishSmt,
     string DataProvider);

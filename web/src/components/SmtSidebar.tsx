@@ -17,7 +17,7 @@ type Props = {
 
 export function SmtSidebar({ events, selectedId, onSelect }: Props) {
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [activeTypes, setActiveTypes] = useState<Set<SmtTypeFilter>>(() => new Set(smtTypeFilters.map((item) => item.value)))
+  const [activeTypes, setActiveTypes] = useState<Set<SmtTypeFilter>>(() => new Set<SmtTypeFilter>(['HighLow']))
   const filteredEvents = useMemo(
     () => events.filter((event) => activeTypes.has(event.setupType as SmtTypeFilter)),
     [activeTypes, events],
@@ -74,14 +74,14 @@ export function SmtSidebar({ events, selectedId, onSelect }: Props) {
           <button
             type="button"
             key={event.id}
-            className={`event-card ${event.direction.toLowerCase()} ${selectedId === event.id ? 'selected' : ''}`}
+            className={`event-card ${event.direction.toLowerCase()} ${event.status.toLowerCase()} ${selectedId === event.id ? 'selected' : ''}`}
             onClick={() => onSelect(event)}
           >
             <div>
               <strong>{event.setupType}</strong>
               <time>{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
             </div>
-            <span>{event.direction} SMT</span>
+            <span>{event.direction} SMT{event.status === 'Canceled' ? ' - Canceled' : ''}</span>
             <p>{event.reason}</p>
             {selectedId === event.id && <small>Click again to open NQ 1m focus</small>}
           </button>

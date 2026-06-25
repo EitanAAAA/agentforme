@@ -1060,6 +1060,16 @@ small {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.22);
 }
 
+.event-card.canceled {
+  background: #f8fafc;
+  border-style: dashed;
+}
+
+.event-card.canceled span {
+  color: #b91c1c;
+  font-weight: 800;
+}
+
 .event-card p {
   font-size: 12px;
   line-height: 1.35;

@@ -43,6 +43,10 @@ export function SettingsDrawer({ open, settings, onClose, onChange }: Props) {
           Refresh seconds
           <input type="number" min={15} max={300} value={settings.refreshRateSeconds} onChange={(event) => onChange({ ...settings, refreshRateSeconds: Number(event.target.value) })} />
         </label>
+        <label>
+          Risk buffer points
+          <input type="number" min={0.25} max={100} step={0.25} value={settings.riskBufferPoints} onChange={(event) => onChange({ ...settings, riskBufferPoints: Number(event.target.value) })} />
+        </label>
         <label className="check-row">
           <input type="checkbox" checked={settings.showBullishSmt} onChange={(event) => onChange({ ...settings, showBullishSmt: event.target.checked })} />
           Show bullish SMT

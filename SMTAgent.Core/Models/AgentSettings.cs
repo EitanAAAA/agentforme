@@ -8,6 +8,7 @@ public sealed class AgentSettings
     public int AlertCooldownCandles { get; set; } = 4;
     public int TickTolerance { get; set; } = 1;
     public decimal TickSize { get; set; } = 0.25m;
+    public decimal RiskBufferPoints { get; set; } = 4m;
     public int SwingLookbackCandles { get; set; } = 96;
     public TimeSpan RefreshRate { get; set; } = TimeSpan.FromSeconds(60);
     public string Timeframe { get; set; } = "15m";

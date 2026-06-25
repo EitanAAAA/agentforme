@@ -225,25 +225,17 @@ export function DashboardPage() {
       setEvents(nextEvents)
       setHighlightedEvent((current) => {
         if (!current) return current
-        return nextEvents.find((event) => event.id === current.id) ?? null
+        return nextEvents.find((event) => event.id === current.id) ?? current
       })
       setFocusedEvent((current) => {
         if (!current) return current
         const updated = nextEvents.find((event) => event.id === current.id)
         if (updated) return updated
-        setFocusedAnalysis(null)
-        setToast({ message: 'SMT canceled. The failed market reached the SMT level.', tone: 'danger' })
-        return null
+        return current
       })
     })
     connection.on('SmtEventCanceled', (canceled: SmtEventCanceledDto) => {
       setToast({ message: canceled.reason, tone: 'danger' })
-      setHighlightedEvent((current) => current?.id === canceled.id ? null : current)
-      setFocusedEvent((current) => {
-        if (current?.id !== canceled.id) return current
-        setFocusedAnalysis(null)
-        return null
-      })
     })
     connection.on('FocusedAnalysisUpdated', (analysis: NqOneMinuteAnalysisDto) => {
       setFocusedAnalysis((current) => current?.smtEventId === analysis.smtEventId ? analysis : current)

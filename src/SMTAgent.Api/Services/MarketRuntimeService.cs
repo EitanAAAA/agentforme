@@ -99,6 +99,7 @@ public sealed class MarketRuntimeService : IHostedService
         lock (_gate)
         {
             return _smtEvents
+                .Where(IsWithinHistoryWindow)
                 .OrderByDescending(signal => signal.Time)
                 .Select(signal => signal.ToDto())
                 .ToList();
@@ -175,11 +176,23 @@ public sealed class MarketRuntimeService : IHostedService
         lock (_gate)
         {
             var nextIds = signals.Select(signal => signal.SignalId).ToHashSet(StringComparer.Ordinal);
-            canceledEvents = _smtEvents
-                .Where(signal => !nextIds.Contains(signal.SignalId))
-                .Select(signal => new SmtEventCanceledDto(signal.SignalId, BuildCanceledMessage(signal)))
+            var newlyCanceled = _smtEvents
+                .Where(signal => signal.Status != SmtSignalStatus.Canceled && !nextIds.Contains(signal.SignalId))
+                .Select(MarkCanceled)
                 .ToList();
-            _smtEvents = signals.ToList();
+            var retainedCanceled = _smtEvents
+                .Where(signal => signal.Status == SmtSignalStatus.Canceled && !nextIds.Contains(signal.SignalId))
+                .ToList();
+            canceledEvents = newlyCanceled
+                .Select(signal => new SmtEventCanceledDto(signal.SignalId, signal.WorkflowState))
+                .ToList();
+            _smtEvents = signals
+                .Concat(retainedCanceled)
+                .Concat(newlyCanceled)
+                .GroupBy(signal => signal.SignalId, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .Where(IsWithinHistoryWindow)
+                .ToList();
             eventDtos = _smtEvents
                 .OrderByDescending(signal => signal.Time)
                 .Select(signal => signal.ToDto())
@@ -219,6 +232,25 @@ public sealed class MarketRuntimeService : IHostedService
     {
         var side = signal.Type == SmtSignalType.Bearish ? "high" : "low";
         return $"SMT canceled: {signal.FailedSymbol} reached {side}";
+    }
+
+    private static SmtSignal MarkCanceled(SmtSignal signal)
+    {
+        return signal with
+        {
+            Status = SmtSignalStatus.Canceled,
+            WorkflowState = BuildCanceledMessage(signal)
+        };
+    }
+
+    private bool IsWithinHistoryWindow(SmtSignal signal)
+    {
+        var latest = _esCandles
+            .Concat(_nqCandles)
+            .Select(candle => (DateTime?)candle.Time)
+            .Max();
+        var cutoff = (latest ?? DateTime.Now) - TimeSpan.FromHours(24);
+        return signal.Time >= cutoff;
     }
 
     private async Task BroadcastAsync(string eventName, object payload)

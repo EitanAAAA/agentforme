@@ -22,7 +22,8 @@ public enum SmtSetupType
 public enum SmtSignalStatus
 {
     Raw,
-    Confirmed
+    Confirmed,
+    Canceled
 }
 
 public enum FairValueGapType
