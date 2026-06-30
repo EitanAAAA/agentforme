@@ -10,6 +10,7 @@ import type {
   ChartAnnotationDto,
   DataStatusDto,
   NqOneMinuteAnalysisDto,
+  SmtEventCanceledDto,
   SmtEventDto,
 } from '../types'
 import { FocusedNqAnalysisPage } from './FocusedNqAnalysisPage'
@@ -22,27 +23,48 @@ const defaultToggles = {
   slTp: true,
 }
 
+type ToastState = {
+  message: string
+  tone: 'info' | 'danger'
+}
+
 function buildSelectedSmtAnnotations(event: SmtEventDto, symbol: 'ES' | 'NQ'): ChartAnnotationDto[] {
   const isEs = symbol === 'ES'
   const previousSwingTimestamp = isEs ? event.esPreviousSwingTimestamp : event.nqPreviousSwingTimestamp
   const previousSwingValue = isEs ? event.esPreviousSwingValue : event.nqPreviousSwingValue
   const currentValue = isEs ? event.esCurrentValue : event.nqCurrentValue
+  const currentTimestamp = isEs ? event.esCurrentTimestamp : event.nqCurrentTimestamp
   const fvgLower = isEs ? event.esFvgLower : event.nqFvgLower
   const fvgUpper = isEs ? event.esFvgUpper : event.nqFvgUpper
   const fvgStart = isEs ? event.esFvgStartTimestamp : event.nqFvgStartTimestamp
   const side = event.direction === 'Bearish' ? 'high' : 'low'
   const role = event.leaderSymbol === symbol ? `broke ${side}` : `failed ${side}`
+  const pointLabel = event.leaderSymbol === symbol ? `SMT point ${side}` : `Held point ${side}`
 
   if (event.setupType === 'HighLow' && previousSwingTimestamp) {
+    if (!sameTimestamp(event.esCurrentTimestamp, event.nqCurrentTimestamp)) {
+      return []
+    }
+
     return [{
       kind: 'Smt',
       direction: event.direction,
       startTimestamp: previousSwingTimestamp,
-      endTimestamp: event.timestamp,
+      endTimestamp: currentTimestamp,
       price: previousSwingValue,
       secondaryPrice: currentValue,
       tertiaryPrice: null,
       label: `${symbol} ${role}`,
+      isTriggered: true,
+    }, {
+      kind: 'SmtExtreme',
+      direction: event.direction,
+      startTimestamp: currentTimestamp,
+      endTimestamp: currentTimestamp,
+      price: currentValue,
+      secondaryPrice: null,
+      tertiaryPrice: null,
+      label: pointLabel,
       isTriggered: true,
     }]
   }
@@ -79,11 +101,21 @@ function buildSelectedSmtAnnotations(event: SmtEventDto, symbol: 'ES' | 'NQ'): C
   }]
 }
 
+function sameTimestamp(first?: string | null, second?: string | null) {
+  if (!first || !second) {
+    return false
+  }
+
+  return new Date(first).getTime() === new Date(second).getTime()
+}
+
 function buildSelectedSmtFocusRange(event: SmtEventDto): ChartFocusRange {
   const candidates = [event.timestamp]
   if (event.setupType === 'HighLow') {
     if (event.esPreviousSwingTimestamp) candidates.push(event.esPreviousSwingTimestamp)
     if (event.nqPreviousSwingTimestamp) candidates.push(event.nqPreviousSwingTimestamp)
+    if (event.esCurrentTimestamp) candidates.push(event.esCurrentTimestamp)
+    if (event.nqCurrentTimestamp) candidates.push(event.nqCurrentTimestamp)
   } else {
     if (event.esFvgStartTimestamp) candidates.push(event.esFvgStartTimestamp)
     if (event.nqFvgStartTimestamp) candidates.push(event.nqFvgStartTimestamp)
@@ -113,6 +145,7 @@ export function DashboardPage() {
   const [visiblePanels, setVisiblePanels] = useState({ nq: true, es: true })
   const [timeframe, setTimeframe] = useState('15m')
   const [syncedCrosshair, setSyncedCrosshair] = useState<ChartCrosshairSync | null>(null)
+  const [toast, setToast] = useState<ToastState | null>(null)
   const visibleCount = Number(visiblePanels.nq) + Number(visiblePanels.es)
 
   useEffect(() => {
@@ -188,6 +221,22 @@ export function DashboardPage() {
     connection.on('SmtEventUpdated', (event: SmtEventDto) => {
       setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)])
     })
+    connection.on('SmtEventsUpdated', (nextEvents: SmtEventDto[]) => {
+      setEvents(nextEvents)
+      setHighlightedEvent((current) => {
+        if (!current) return current
+        return nextEvents.find((event) => event.id === current.id) ?? current
+      })
+      setFocusedEvent((current) => {
+        if (!current) return current
+        const updated = nextEvents.find((event) => event.id === current.id)
+        if (updated) return updated
+        return current
+      })
+    })
+    connection.on('SmtEventCanceled', (canceled: SmtEventCanceledDto) => {
+      setToast({ message: canceled.reason, tone: 'danger' })
+    })
     connection.on('FocusedAnalysisUpdated', (analysis: NqOneMinuteAnalysisDto) => {
       setFocusedAnalysis((current) => current?.smtEventId === analysis.smtEventId ? analysis : current)
     })
@@ -196,6 +245,32 @@ export function DashboardPage() {
       connection.stop().catch(() => undefined)
     }
   }, [timeframe])
+
+  useEffect(() => {
+    if (!focusedEvent) {
+      return
+    }
+
+    const focusedEventId = focusedEvent.id
+    let disposed = false
+    async function refreshFocusedAnalysis() {
+      try {
+        const analysis = await api.getFocusedAnalysis(focusedEventId)
+        if (!disposed) {
+          setFocusedAnalysis(analysis)
+        }
+      } catch {
+        // Keep the current focused replay available if a refresh misses.
+      }
+    }
+
+    refreshFocusedAnalysis()
+    const interval = window.setInterval(refreshFocusedAnalysis, 30_000)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+    }
+  }, [focusedEvent])
 
   const sortedEvents = useMemo(
     () => [...events].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
@@ -238,19 +313,27 @@ export function DashboardPage() {
 
   if (focusedEvent) {
     return (
-      <div className="app-shell">
-        <FocusedNqAnalysisPage
-          event={focusedEvent}
-          analysis={focusedAnalysis}
-          show={toggles}
-          onToggle={(key) => setToggles((current) => ({ ...current, [key]: !current[key] }))}
-          onBack={() => {
-            setFocusedEvent(null)
-            setFocusedAnalysis(null)
-          }}
-        />
-        <SmtSidebar events={sortedEvents} selectedId={focusedEvent.id} onSelect={selectEvent} />
-      </div>
+      <>
+        <div className="app-shell">
+          <FocusedNqAnalysisPage
+            event={focusedEvent}
+            analysis={focusedAnalysis}
+            show={toggles}
+            onToggle={(key) => setToggles((current) => ({ ...current, [key]: !current[key] }))}
+            onBack={() => {
+              setFocusedEvent(null)
+              setFocusedAnalysis(null)
+            }}
+          />
+          <SmtSidebar events={sortedEvents} selectedId={focusedEvent.id} onSelect={selectEvent} />
+        </div>
+        {toast && (
+          <div className={`smt-toast ${toast.tone}`} role="status">
+            <span>{toast.message}</span>
+            <button type="button" onClick={() => setToast(null)}>Close</button>
+          </div>
+        )}
+      </>
     )
   }
 
@@ -308,6 +391,12 @@ export function DashboardPage() {
       </main>
       <SmtSidebar events={sortedEvents} selectedId={highlightedEvent?.id ?? null} onSelect={selectEvent} />
       <SettingsDrawer open={settingsOpen} settings={settings} onClose={() => setSettingsOpen(false)} onChange={updateSettings} />
+      {toast && (
+        <div className={`smt-toast ${toast.tone}`} role="status">
+          <span>{toast.message}</span>
+          <button type="button" onClick={() => setToast(null)}>Close</button>
+        </div>
+      )}
     </div>
   )
 }

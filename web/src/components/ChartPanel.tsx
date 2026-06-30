@@ -9,7 +9,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { CandleDto, ChartAnnotationDto } from '../types'
-import { AnnotationLayer, type OverlayBox, type OverlayLine } from './AnnotationLayer'
+import { AnnotationLayer, type OverlayBox, type OverlayLine, type OverlayPoint } from './AnnotationLayer'
 import { ChartToolbar } from './ChartToolbar'
 
 type Tool = 'select' | 'line' | 'box' | 'halfbox' | 'sltp' | 'text' | 'measure'
@@ -77,6 +77,8 @@ type Props = {
   onCrosshairMove?: (sync: ChartCrosshairSync) => void
   focusTime?: string | null
   focusRange?: ChartFocusRange | null
+  onBarClick?: (candle: CandleDto, index: number) => void
+  showDrawingTools?: boolean
 }
 
 function toTimestamp(timestamp: string): UTCTimestamp {
@@ -106,6 +108,8 @@ export function ChartPanel({
   onCrosshairMove,
   focusTime,
   focusRange,
+  onBarClick,
+  showDrawingTools = true,
 }: Props) {
   const shellRef = useRef<HTMLDivElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -125,6 +129,7 @@ export function ChartPanel({
   const drawingsRef = useRef<Drawing[]>([])
   const candlesRef = useRef<CandleDto[]>([])
   const annotationsRef = useRef<ChartAnnotationDto[]>([])
+  const onBarClickRef = useRef<Props['onBarClick']>(undefined)
   const suppressCrosshairSyncRef = useRef(false)
   const appliedFocusKeyRef = useRef<string | null>(null)
   const [ohlc, setOhlc] = useState('O -- H -- L -- C --')
@@ -142,7 +147,7 @@ export function ChartPanel({
     : `S&P 500 E-mini Futures - ${timeframe} - CME`
 
   const scheduleOverlay = useCallback(() => {
-    if (annotationsRef.current.length === 0 && drawingsRef.current.length === 0) {
+    if (annotationsRef.current.length === 0 && (!showDrawingTools || drawingsRef.current.length === 0)) {
       return
     }
 
@@ -154,7 +159,7 @@ export function ChartPanel({
       rafRef.current = null
       setOverlayVersion((value) => value + 1)
     })
-  }, [])
+  }, [showDrawingTools])
 
   const commitDrawings = useCallback((next: Drawing[]) => {
     drawingsRef.current = next
@@ -163,13 +168,17 @@ export function ChartPanel({
   }, [scheduleOverlay])
 
   useEffect(() => {
-    drawingsRef.current = drawings
-  }, [drawings])
+    drawingsRef.current = showDrawingTools ? drawings : []
+  }, [drawings, showDrawingTools])
 
   useEffect(() => {
     annotationsRef.current = annotations
     scheduleOverlay()
   }, [annotations, scheduleOverlay])
+
+  useEffect(() => {
+    onBarClickRef.current = onBarClick
+  }, [onBarClick])
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -282,8 +291,34 @@ export function ChartPanel({
       })
     })
 
+    const clickSubscription = (param: { time?: Time }) => {
+      if (!param.time || !onBarClickRef.current) {
+        return
+      }
+
+      const target = normalizeTime(param.time)
+      const index = candlesRef.current.findIndex((candle) => toTimestamp(candle.timestamp) === target)
+      if (index < 0) {
+        return
+      }
+
+      onBarClickRef.current(candlesRef.current[index], index)
+    }
+    chart.subscribeClick(clickSubscription)
+
+    const overlayHost = containerRef.current
+    const scheduleInteractionOverlay = () => {
+      scheduleOverlay()
+      requestAnimationFrame(scheduleOverlay)
+      window.setTimeout(scheduleOverlay, 80)
+    }
+    const interactionEvents = ['wheel', 'pointerdown', 'pointermove', 'pointerup', 'touchmove', 'touchend'] as const
+    for (const eventName of interactionEvents) {
+      overlayHost.addEventListener(eventName, scheduleInteractionOverlay, { passive: true })
+    }
+
     const resizeObserver = new ResizeObserver(scheduleOverlay)
-    resizeObserver.observe(containerRef.current)
+    resizeObserver.observe(overlayHost)
 
     return () => {
       if (rafRef.current !== null) {
@@ -293,6 +328,10 @@ export function ChartPanel({
         cancelAnimationFrame(crosshairRafRef.current)
       }
       resizeObserver.disconnect()
+      for (const eventName of interactionEvents) {
+        overlayHost.removeEventListener(eventName, scheduleInteractionOverlay)
+      }
+      chart.unsubscribeClick(clickSubscription)
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeSubscription)
       chart.remove()
     }
@@ -381,8 +420,8 @@ export function ChartPanel({
 
   const overlay = useMemo(() => {
     void overlayVersion
-    return projectAnnotations(annotations, drawings, selectedId, chartRef.current, seriesRef.current)
-  }, [annotations, drawings, overlayVersion, selectedId])
+    return projectAnnotations(annotations, showDrawingTools ? drawings : [], selectedId, chartRef.current, seriesRef.current)
+  }, [annotations, drawings, overlayVersion, selectedId, showDrawingTools])
 
   useEffect(() => {
     if (!selectedId) {
@@ -427,7 +466,7 @@ export function ChartPanel({
   }
 
   const onLayerPointerDown = (event: PointerEvent<SVGSVGElement>) => {
-    if (tool === 'select') {
+    if (!showDrawingTools || tool === 'select') {
       return
     }
 
@@ -491,7 +530,7 @@ export function ChartPanel({
   }
 
   const onSelect = (id: string, event: PointerEvent) => {
-    if (tool !== 'select') {
+    if (!showDrawingTools || tool !== 'select') {
       return
     }
 
@@ -527,7 +566,7 @@ export function ChartPanel({
   }
 
   return (
-    <section className={`chart-panel ${compact ? 'compact' : ''}`}>
+    <section className={`chart-panel ${compact ? 'compact' : ''} ${showDrawingTools ? '' : 'no-drawing-tools'}`}>
       <ChartToolbar
         title={title}
         subtitle={ohlc}
@@ -538,31 +577,36 @@ export function ChartPanel({
         onLatest={latest}
       />
       <div ref={shellRef} className="chart-shell" onDoubleClick={reset}>
-        <DrawingToolbar
-          tool={tool}
-          magnetEnabled={magnetEnabled}
-          selectedDrawing={selectedDrawing}
-          onTool={chooseTool}
-          onToggleMagnet={() => setMagnetEnabled((value) => !value)}
-          onLock={() => updateSelected((drawing) => ({ ...drawing, locked: !drawing.locked }))}
-          onToggleHidden={() => updateSelected((drawing) => ({ ...drawing, hidden: !drawing.hidden }))}
-          onDelete={() => deleteSelected()}
-        />
-        <ShortcutPalette
-          tool={tool}
-          magnetEnabled={magnetEnabled}
-          position={shortcutPosition}
-          onTool={chooseTool}
-          onToggleMagnet={() => setMagnetEnabled((value) => !value)}
-          onDragStart={startPaletteDrag}
-          onDragMove={movePalette}
-          onDragEnd={endPaletteDrag}
-        />
+        {showDrawingTools && (
+          <>
+            <DrawingToolbar
+              tool={tool}
+              magnetEnabled={magnetEnabled}
+              selectedDrawing={selectedDrawing}
+              onTool={chooseTool}
+              onToggleMagnet={() => setMagnetEnabled((value) => !value)}
+              onLock={() => updateSelected((drawing) => ({ ...drawing, locked: !drawing.locked }))}
+              onToggleHidden={() => updateSelected((drawing) => ({ ...drawing, hidden: !drawing.hidden }))}
+              onDelete={() => deleteSelected()}
+            />
+            <ShortcutPalette
+              tool={tool}
+              magnetEnabled={magnetEnabled}
+              position={shortcutPosition}
+              onTool={chooseTool}
+              onToggleMagnet={() => setMagnetEnabled((value) => !value)}
+              onDragStart={startPaletteDrag}
+              onDragMove={movePalette}
+              onDragEnd={endPaletteDrag}
+            />
+          </>
+        )}
         <div ref={containerRef} className="chart-root" />
         <AnnotationLayer
           boxes={overlay.boxes}
           lines={overlay.lines}
-          mode={tool === 'select' ? 'select' : 'draw'}
+          points={overlay.points}
+          mode={!showDrawingTools || tool === 'select' ? 'select' : 'draw'}
           selectedId={selectedId}
           onPointerDown={onLayerPointerDown}
           onPointerMove={onLayerPointerMove}
@@ -570,7 +614,7 @@ export function ChartPanel({
           onSelect={onSelect}
           onHandle={onHandle}
         />
-        {selectedDrawing && floating && (
+        {showDrawingTools && selectedDrawing && floating && (
           <FloatingToolbar
             left={floating.left}
             top={floating.top}
@@ -701,7 +745,7 @@ export function ChartPanel({
   }
 
   function updateSelected(update: (drawing: Drawing) => Drawing) {
-    if (!selectedId) {
+    if (!showDrawingTools || !selectedId) {
       return
     }
 
@@ -892,11 +936,12 @@ function projectAnnotations(
   series: ISeriesApi<'Candlestick'> | null,
 ) {
   if (!chart || !series) {
-    return { boxes: [] as OverlayBox[], lines: [] as OverlayLine[] }
+    return { boxes: [] as OverlayBox[], lines: [] as OverlayLine[], points: [] as OverlayPoint[] }
   }
 
   const boxes: OverlayBox[] = []
   const lines: OverlayLine[] = []
+  const points: OverlayPoint[] = []
   for (const annotation of annotations) {
     const x1 = chart.timeScale().timeToCoordinate(toTimestamp(annotation.startTimestamp))
     const x2 = chart.timeScale().timeToCoordinate(toTimestamp(annotation.endTimestamp))
@@ -908,6 +953,22 @@ function projectAnnotations(
       const y = series.priceToCoordinate(annotation.secondaryPrice ?? annotation.price)
       if (y !== null) {
         lines.push({ id: `backend-${annotation.kind}-${annotation.endTimestamp}`, kind: 'bos', label: 'BOS', x1, x2, y1: y, y2: y, color: '#2563eb' })
+      }
+      continue
+    }
+
+    if (annotation.kind === 'SmtExtreme') {
+      const y = series.priceToCoordinate(annotation.price)
+      if (y !== null) {
+        points.push({
+          id: `backend-${annotation.kind}-${annotation.endTimestamp}-${annotation.price}`,
+          kind: 'smt-extreme',
+          label: annotation.label || 'SMT point',
+          x: x2,
+          y,
+          color: '#2563eb',
+          labelPlacement: annotation.direction === 'Bearish' ? 'above' : 'below',
+        })
       }
       continue
     }
@@ -1013,7 +1074,7 @@ function projectAnnotations(
     boxes.push(toBox(drawing, x1, x2, y1, y2, 'fvg', drawing.label, selectedId))
   }
 
-  return { boxes, lines }
+  return { boxes, lines, points }
 }
 
 function addHalfBox(

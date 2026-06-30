@@ -8,7 +8,6 @@ public sealed class NqFocusedAnalysisEngine
     private static readonly TimeSpan StructureLookback = TimeSpan.FromMinutes(22);
     private static readonly TimeSpan MaxPostSmtFocus = TimeSpan.FromMinutes(70);
     private static readonly TimeSpan StoryBuffer = TimeSpan.FromMinutes(8);
-    private readonly SwingDetector _swingDetector = new();
 
     public FocusedAnalysisResult Analyze(IReadOnlyList<Candle> nqCandles, SmtSignal signal, AgentSettings settings)
     {
@@ -39,6 +38,12 @@ public sealed class NqFocusedAnalysisEngine
             annotations.Add(smtAnnotation);
         }
 
+        var smtExtreme = BuildSmtExtremeAnnotation(analysisCandles, signal, direction);
+        if (smtExtreme is not null)
+        {
+            annotations.Add(smtExtreme);
+        }
+
         var bos = FindBos(analysisCandles, signal.Time, direction, settings.SwingStrength, tolerance);
         if (bos is not null)
         {
@@ -48,31 +53,31 @@ public sealed class NqFocusedAnalysisEngine
                 bos.Swing.Time,
                 bos.BreakCandle.Time,
                 bos.Swing.Price,
-                bos.BreakCandle.Close,
+                bos.BreakPrice,
                 null,
                 "BOS"));
         }
 
         var fvgs = DetectFvgs(analysisCandles, tolerance);
-        var executionFvg = SelectExecutionFvg(fvgs, bos, direction);
-        if (executionFvg is not null)
+        var setupFvg = SelectSetupFvg(fvgs, signal, bos, direction);
+        if (setupFvg is not null)
         {
-            annotations.Add(ToAnnotation(executionFvg, FocusedAnnotationKind.Fvg, direction, "FVG"));
+            annotations.Add(ToFvgAnnotation(setupFvg, FocusedAnnotationKind.Fvg, GetSetupFvgLabel(setupFvg)));
         }
 
-        var ifvg = DetectIfvg(fvgs, analysisCandles, signal.Time, bos, direction, tolerance);
+        var ifvg = DetectIfvg(setupFvg, analysisCandles, bos, direction, tolerance);
         if (ifvg is not null)
         {
             annotations.Add(ifvg);
         }
 
         var storyEnd = GetStoryEnd(signal, analysisCandles, annotations);
-        var halfBox = BuildHalfBox(analysisCandles, signal, direction, focusStart, storyEnd);
+        var halfBox = BuildHalfBox(analysisCandles, signal, direction, storyEnd, bos, ifvg);
         if (halfBox is not null)
         {
             annotations.Add(halfBox);
 
-            var tradeBox = BuildTradeBox(analysisCandles, signal.Time, direction, halfBox, storyEnd);
+            var tradeBox = BuildTradeBox(analysisCandles, ifvg!.EndTime, direction, halfBox, storyEnd, settings);
             if (tradeBox is not null)
             {
                 annotations.Add(tradeBox);
@@ -123,6 +128,41 @@ public sealed class NqFocusedAnalysisEngine
         return null;
     }
 
+    private static FocusedChartAnnotation? BuildSmtExtremeAnnotation(
+        IReadOnlyList<Candle> candles,
+        SmtSignal signal,
+        SmtSignalType direction)
+    {
+        if (signal.SetupType != SmtSetupType.HighLow)
+        {
+            return null;
+        }
+
+        var postSmt = candles
+            .Where(candle => candle.Time >= signal.Time)
+            .OrderBy(candle => candle.Time)
+            .ToList();
+        if (postSmt.Count == 0)
+        {
+            return null;
+        }
+
+        var extreme = direction == SmtSignalType.Bearish
+            ? postSmt.OrderByDescending(candle => candle.High).ThenBy(candle => candle.Time).First()
+            : postSmt.OrderBy(candle => candle.Low).ThenBy(candle => candle.Time).First();
+        var price = direction == SmtSignalType.Bearish ? extreme.High : extreme.Low;
+
+        return new FocusedChartAnnotation(
+            FocusedAnnotationKind.SmtExtreme,
+            direction,
+            extreme.Time,
+            extreme.Time,
+            price,
+            null,
+            null,
+            "SMT point");
+    }
+
     private static DateTime GetFocusStart(SmtSignal signal)
     {
         var candidates = new List<DateTime> { signal.Time - PreSmtBuffer };
@@ -149,7 +189,27 @@ public sealed class NqFocusedAnalysisEngine
         int swingStrength,
         decimal tolerance)
     {
-        var swings = _swingDetector.Detect(candles, Math.Max(1, swingStrength));
+        var swings = DetectStructurePivots(candles);
+        var signalIndex = candles
+            .Select((candle, index) => new { candle.Time, index })
+            .Where(item => item.Time <= signalTime)
+            .OrderByDescending(item => item.Time)
+            .Select(item => item.index)
+            .FirstOrDefault();
+        var swingType = direction == SmtSignalType.Bearish ? SwingPointType.Low : SwingPointType.High;
+        var structureSwing = swings
+            .Where(item =>
+                item.Type == swingType &&
+                item.Time < signalTime &&
+                item.Time >= signalTime - StructureLookback &&
+                item.CandleIndex + 1 <= signalIndex)
+            .OrderByDescending(item => item.CandleIndex)
+            .FirstOrDefault();
+        if (structureSwing is null)
+        {
+            return null;
+        }
+
         for (var index = 0; index < candles.Count; index++)
         {
             var candle = candles[index];
@@ -158,30 +218,22 @@ public sealed class NqFocusedAnalysisEngine
                 continue;
             }
 
-            var swingType = direction == SmtSignalType.Bearish ? SwingPointType.Low : SwingPointType.High;
-            var swing = swings
-                .Where(item => item.Type == swingType && item.CandleIndex < index && item.Time >= signalTime - PreSmtBuffer)
-                .OrderByDescending(item => item.CandleIndex)
-                .FirstOrDefault();
-            if (swing is null)
-            {
-                continue;
-            }
-
             var broke = direction == SmtSignalType.Bearish
-                ? candle.Close < swing.Price - tolerance
-                : candle.Close > swing.Price + tolerance;
+                ? candle.Low < structureSwing.Price - tolerance
+                : candle.High > structureSwing.Price + tolerance;
             if (broke)
             {
-                return new BosResult(swing, candle);
+                var breakPrice = direction == SmtSignalType.Bearish ? candle.Low : candle.High;
+                return new BosResult(structureSwing, candle, breakPrice);
             }
         }
 
         return null;
     }
 
-    private static FairValueGap? SelectExecutionFvg(
+    private static FairValueGap? SelectSetupFvg(
         IReadOnlyList<FairValueGap> fvgs,
+        SmtSignal signal,
         BosResult? bos,
         SmtSignalType direction)
     {
@@ -190,71 +242,91 @@ public sealed class NqFocusedAnalysisEngine
             return null;
         }
 
-        var setupType = direction == SmtSignalType.Bearish ? FairValueGapType.Bearish : FairValueGapType.Bullish;
+        var setupType = GetSourceFvgType(direction);
+        var moveStart = signal.SetupType == SmtSetupType.HighLow && signal.NqPreviousSwingTime != default
+            ? signal.NqPreviousSwingTime
+            : signal.Time - PreSmtBuffer;
+
+        var intoSmt = fvgs
+            .Where(fvg => fvg.Type == setupType && fvg.EndTime >= moveStart && fvg.EndTime <= signal.Time)
+            .OrderByDescending(fvg => fvg.EndTime)
+            .FirstOrDefault();
+        if (intoSmt is not null)
+        {
+            return intoSmt;
+        }
+
         return fvgs
-            .Where(fvg => fvg.Type == setupType && fvg.EndTime >= bos.BreakCandle.Time)
-            .OrderBy(fvg => fvg.StartTime)
+            .Where(fvg => fvg.Type == setupType && fvg.EndTime > signal.Time && fvg.EndTime <= bos.BreakCandle.Time)
+            .OrderByDescending(fvg => fvg.EndTime)
             .FirstOrDefault();
     }
 
     private static FocusedChartAnnotation? DetectIfvg(
-        IReadOnlyList<FairValueGap> fvgs,
+        FairValueGap? setupFvg,
         IReadOnlyList<Candle> candles,
-        DateTime signalTime,
         BosResult? bos,
         SmtSignalType direction,
         decimal tolerance)
     {
-        var sourceType = direction == SmtSignalType.Bearish ? FairValueGapType.Bullish : FairValueGapType.Bearish;
-        var earliestInversion = bos?.BreakCandle.Time ?? signalTime;
-        foreach (var fvg in fvgs
-            .Where(fvg => fvg.Type == sourceType && fvg.StartTime >= signalTime && fvg.EndTime <= signalTime + MaxPostSmtFocus)
-            .OrderBy(fvg => fvg.StartTime))
+        if (setupFvg is null || bos is null)
         {
-            var inverted = candles.FirstOrDefault(candle =>
-                candle.Time > fvg.EndTime &&
-                candle.Time >= earliestInversion &&
-                IsInversionCandle(candle, fvg, direction, candles, tolerance));
-            if (inverted is null)
-            {
-                continue;
-            }
-
-            return new FocusedChartAnnotation(
-                FocusedAnnotationKind.Ifvg,
-                direction,
-                fvg.StartTime,
-                inverted.Time,
-                fvg.Upper,
-                fvg.Lower,
-                null,
-                direction == SmtSignalType.Bearish ? "Bearish IFVG" : "Bullish IFVG");
+            return null;
         }
 
-        return null;
+        var inverted = candles.FirstOrDefault(candle =>
+            candle.Time > setupFvg.EndTime &&
+            candle.Time >= bos.BreakCandle.Time &&
+            IsInversionCandle(candle, setupFvg, direction, tolerance));
+        if (inverted is null)
+        {
+            return null;
+        }
+
+        return new FocusedChartAnnotation(
+            FocusedAnnotationKind.Ifvg,
+            direction,
+            setupFvg.StartTime,
+            inverted.Time,
+            setupFvg.Upper,
+            setupFvg.Lower,
+            null,
+            direction == SmtSignalType.Bearish ? "Bearish IFVG" : "Bullish IFVG");
     }
 
     private static FocusedChartAnnotation? BuildHalfBox(
         IReadOnlyList<Candle> candles,
         SmtSignal signal,
         SmtSignalType direction,
-        DateTime startTime,
-        DateTime endTime)
+        DateTime endTime,
+        BosResult? bos,
+        FocusedChartAnnotation? ifvg)
     {
-        var postSmt = candles.Where(candle => candle.Time >= signal.Time && candle.Time <= endTime).ToList();
-        if (postSmt.Count == 0)
+        if (bos is null || ifvg is null)
         {
             return null;
         }
 
-        var level0 = signal.NqCurrentValue;
-        var level1 = direction == SmtSignalType.Bearish
-            ? postSmt.Min(candle => candle.Low)
-            : postSmt.Max(candle => candle.High);
-        var hasRange = direction == SmtSignalType.Bearish
-            ? level1 < level0
-            : level1 > level0;
-        if (!hasRange)
+        var sweepWindow = candles
+            .Where(candle => candle.Time >= signal.Time && candle.Time <= bos.BreakCandle.Time)
+            .ToList();
+        var displacementWindow = candles
+            .Where(candle => candle.Time >= bos.BreakCandle.Time && candle.Time <= ifvg.EndTime)
+            .ToList();
+        if (sweepWindow.Count == 0 || displacementWindow.Count == 0)
+        {
+            return null;
+        }
+
+        var smtExtreme = direction == SmtSignalType.Bearish
+            ? Math.Max(signal.NqCurrentValue, sweepWindow.Max(candle => candle.High))
+            : Math.Min(signal.NqCurrentValue, sweepWindow.Min(candle => candle.Low));
+        var displacementExtreme = direction == SmtSignalType.Bearish
+            ? displacementWindow.Min(candle => candle.Low)
+            : displacementWindow.Max(candle => candle.High);
+        var level0 = direction == SmtSignalType.Bearish ? displacementExtreme : smtExtreme;
+        var level1 = direction == SmtSignalType.Bearish ? smtExtreme : displacementExtreme;
+        if (level1 <= level0)
         {
             return null;
         }
@@ -263,7 +335,7 @@ public sealed class NqFocusedAnalysisEngine
         return new FocusedChartAnnotation(
             FocusedAnnotationKind.HalfBox,
             direction,
-            startTime,
+            signal.Time,
             endTime,
             level0,
             midpoint,
@@ -273,19 +345,20 @@ public sealed class NqFocusedAnalysisEngine
 
     private static FocusedChartAnnotation? BuildTradeBox(
         IReadOnlyList<Candle> candles,
-        DateTime signalTime,
+        DateTime availableFrom,
         SmtSignalType direction,
         FocusedChartAnnotation halfBox,
-        DateTime endTime)
+        DateTime endTime,
+        AgentSettings settings)
     {
-        if (halfBox.SecondaryPrice is null)
+        if (halfBox.SecondaryPrice is null || halfBox.TertiaryPrice is null)
         {
             return null;
         }
 
         var entry = halfBox.SecondaryPrice.Value;
         var trigger = candles.FirstOrDefault(candle =>
-            candle.Time >= signalTime &&
+            candle.Time >= availableFrom &&
             candle.Time <= endTime &&
             candle.Low <= entry &&
             candle.High >= entry);
@@ -294,8 +367,12 @@ public sealed class NqFocusedAnalysisEngine
             return null;
         }
 
-        var stop = halfBox.Price;
-        var target = halfBox.TertiaryPrice ?? (direction == SmtSignalType.Bearish ? entry - 200m : entry + 200m);
+        var riskBuffer = Math.Max(settings.RiskBufferPoints, settings.TickSize);
+        var invalidation = direction == SmtSignalType.Bearish ? halfBox.TertiaryPrice.Value : halfBox.Price;
+        var stop = direction == SmtSignalType.Bearish
+            ? invalidation + riskBuffer
+            : invalidation - riskBuffer;
+        var target = direction == SmtSignalType.Bearish ? halfBox.Price : halfBox.TertiaryPrice.Value;
         return new FocusedChartAnnotation(
             FocusedAnnotationKind.StopTakeProfit,
             direction,
@@ -304,7 +381,7 @@ public sealed class NqFocusedAnalysisEngine
             entry,
             stop,
             target,
-            "Entry");
+            "Visual entry");
     }
 
     private static IReadOnlyList<FairValueGap> DetectFvgs(IReadOnlyList<Candle> candles, decimal minGapSize)
@@ -330,44 +407,50 @@ public sealed class NqFocusedAnalysisEngine
         return fvgs;
     }
 
+    private static IReadOnlyList<SwingPoint> DetectStructurePivots(IReadOnlyList<Candle> candles)
+    {
+        var swings = new List<SwingPoint>();
+        if (candles.Count < 3)
+        {
+            return swings;
+        }
+
+        for (var index = 1; index < candles.Count - 1; index++)
+        {
+            var candle = candles[index];
+            if (candle.High > candles[index - 1].High && candle.High > candles[index + 1].High)
+            {
+                swings.Add(new SwingPoint(candle.Symbol, candle.Time, candle.High, SwingPointType.High, index));
+            }
+
+            if (candle.Low < candles[index - 1].Low && candle.Low < candles[index + 1].Low)
+            {
+                swings.Add(new SwingPoint(candle.Symbol, candle.Time, candle.Low, SwingPointType.Low, index));
+            }
+        }
+
+        return swings;
+    }
+
     private static bool IsInversionCandle(
         Candle candle,
         FairValueGap fvg,
         SmtSignalType direction,
-        IReadOnlyList<Candle> candles,
         decimal tolerance)
     {
-        var body = Math.Abs(candle.Close - candle.Open);
-        var averageBody = GetAverageBody(candles, candle.Time, 10);
-        var minimumBody = Math.Max(fvg.Upper - fvg.Lower, averageBody * 1.1m);
-
         if (direction == SmtSignalType.Bearish && fvg.Type == FairValueGapType.Bullish)
         {
             return candle.Close < candle.Open &&
-                body >= minimumBody &&
                 candle.Close < fvg.Lower - tolerance;
         }
 
         if (direction == SmtSignalType.Bullish && fvg.Type == FairValueGapType.Bearish)
         {
             return candle.Close > candle.Open &&
-                body >= minimumBody &&
                 candle.Close > fvg.Upper + tolerance;
         }
 
         return false;
-    }
-
-    private static decimal GetAverageBody(IReadOnlyList<Candle> candles, DateTime beforeTime, int count)
-    {
-        var sample = candles
-            .Where(candle => candle.Time < beforeTime)
-            .OrderByDescending(candle => candle.Time)
-            .Take(count)
-            .Select(candle => Math.Abs(candle.Close - candle.Open))
-            .Where(body => body > 0m)
-            .ToList();
-        return sample.Count == 0 ? 1m : sample.Average();
     }
 
     private static DateTime GetStoryEnd(SmtSignal signal, IReadOnlyList<Candle> candles, IReadOnlyList<FocusedChartAnnotation> annotations)
@@ -396,6 +479,22 @@ public sealed class NqFocusedAnalysisEngine
         return new FocusedChartAnnotation(kind, direction, fvg.StartTime, fvg.EndTime, fvg.Upper, fvg.Lower, null, label);
     }
 
+    private static FocusedChartAnnotation ToFvgAnnotation(FairValueGap fvg, FocusedAnnotationKind kind, string label)
+    {
+        var direction = fvg.Type == FairValueGapType.Bullish ? SmtSignalType.Bullish : SmtSignalType.Bearish;
+        return ToAnnotation(fvg, kind, direction, label);
+    }
+
+    private static FairValueGapType GetSourceFvgType(SmtSignalType direction)
+    {
+        return direction == SmtSignalType.Bearish ? FairValueGapType.Bullish : FairValueGapType.Bearish;
+    }
+
+    private static string GetSetupFvgLabel(FairValueGap fvg)
+    {
+        return fvg.Type == FairValueGapType.Bullish ? "Bullish FVG" : "Bearish FVG";
+    }
+
     private static string BuildSummary(SmtSignal signal, BosResult? bos, IReadOnlyList<FocusedChartAnnotation> annotations)
     {
         var bosText = bos is null ? "BOS pending" : $"BOS at {bos.BreakCandle.Time:HH:mm}";
@@ -404,5 +503,5 @@ public sealed class NqFocusedAnalysisEngine
         return $"{signal.Type} NQ 1m focus | {bosText} | FVG {fvgCount} | IFVG {ifvgCount}";
     }
 
-    private sealed record BosResult(SwingPoint Swing, Candle BreakCandle);
+    private sealed record BosResult(SwingPoint Swing, Candle BreakCandle, decimal BreakPrice);
 }

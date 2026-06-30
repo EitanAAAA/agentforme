@@ -82,6 +82,8 @@ public sealed record SmtEventDto(
     string DetectionMode,
     decimal EsCurrentValue,
     decimal NqCurrentValue,
+    DateTime EsCurrentTimestamp,
+    DateTime NqCurrentTimestamp,
     decimal EsPreviousSwingValue,
     decimal NqPreviousSwingValue,
     DateTime EsPreviousSwingTimestamp,
@@ -94,6 +96,10 @@ public sealed record SmtEventDto(
     decimal? NqFvgUpper,
     DateTime? NqFvgStartTimestamp,
     DateTime? NqFvgEndTimestamp);
+
+public sealed record SmtEventCanceledDto(
+    string Id,
+    string Reason);
 
 public sealed record NqOneMinuteAnalysisDto(
     string SmtEventId,
@@ -117,6 +123,7 @@ public sealed record AppSettingsDto(
     int AlertCooldownCandles,
     int TickTolerance,
     decimal TickSize,
+    decimal RiskBufferPoints,
     bool ShowBullishSmt,
     bool ShowBearishSmt,
     string DataProvider);

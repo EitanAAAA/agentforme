@@ -31,6 +31,8 @@ public static class ApiMapping
             signal.DetectionMode.ToString(),
             signal.EsCurrentValue,
             signal.NqCurrentValue,
+            signal.EsCurrentTime,
+            signal.NqCurrentTime,
             signal.EsPreviousSwingValue,
             signal.NqPreviousSwingValue,
             signal.EsPreviousSwingTime,
@@ -70,6 +72,7 @@ public static class ApiMapping
             settings.AlertCooldownCandles,
             settings.TickTolerance,
             settings.TickSize,
+            settings.RiskBufferPoints,
             settings.ShowBullishSmt,
             settings.ShowBearishSmt,
             settings.DataProvider.ToString());
@@ -84,6 +87,7 @@ public static class ApiMapping
         settings.AlertCooldownCandles = Math.Clamp(dto.AlertCooldownCandles, 0, 50);
         settings.TickTolerance = Math.Clamp(dto.TickTolerance, 0, 10);
         settings.TickSize = dto.TickSize <= 0 ? 0.25m : dto.TickSize;
+        settings.RiskBufferPoints = Math.Clamp(dto.RiskBufferPoints, settings.TickSize, 100m);
         settings.ShowBullishSmt = dto.ShowBullishSmt;
         settings.ShowBearishSmt = dto.ShowBearishSmt;
 

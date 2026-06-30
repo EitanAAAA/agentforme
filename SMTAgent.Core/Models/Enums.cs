@@ -22,7 +22,8 @@ public enum SmtSetupType
 public enum SmtSignalStatus
 {
     Raw,
-    Confirmed
+    Confirmed,
+    Canceled
 }
 
 public enum FairValueGapType
@@ -34,6 +35,7 @@ public enum FairValueGapType
 public enum FocusedAnnotationKind
 {
     Smt,
+    SmtExtreme,
     Bos,
     Fvg,
     Ifvg,
